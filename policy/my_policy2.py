@@ -25,6 +25,7 @@ def assign_task(env):
     task_assign = [-1] * env.agent_num
 
     if not hasattr(env, 'current_tasklist') or len(env.current_tasklist) < env.agent_num:
+        print("Not enough tasks to assign")
         return task_assign
 
     # available_indices are indices in env.current_tasklist that are unassigned
@@ -38,6 +39,8 @@ def assign_task(env):
         best_task_idx = -1
         best_dist = float('inf')
 
+        print(f"Agent {i} evaluating tasks... {len(available_indices)} available")
+
         for idx in list(available_indices):
             # idx indexes into env.current_tasklist
             try:
@@ -47,15 +50,22 @@ def assign_task(env):
 
             # task expected as [pick_node, drop_node]
             pick_node = task[0]
+            drop_node = task[1]
             # measure distance from agent's current goal (or location) to pick_node
             # use env.get_path_length which may return None
-            path_length = env.get_path_length(env.goal_array[i], pick_node)
+            path_to_pick = env.get_path_length(env.current_start[i], pick_node)
+            path_pick_to_drop = env.get_path_length(pick_node, drop_node)
+            path_length = path_to_pick + path_pick_to_drop
             if path_length is None:
+                print("Path length is None")
                 continue
             if path_length < best_dist:
                 best_dist = path_length
                 best_task_idx = idx
-
+    
+        if best_task_idx == -1:
+            print(f"No suitable task found for agent {i}")
+            
         if best_task_idx != -1:
             task_assign[i] = best_task_idx
             # reserve this task locally so another agent won't pick it in this loop
@@ -74,7 +84,7 @@ def detect_actions(env):
         return [-1]*env.agent_num
     # 各エージェントの最短経路距離を計算
     for i in range(env.agent_num):
-        assigned_task = env.assigned_tasks[i] if i < len(env.assigned_tasks) else []
+        assigned_task = env.assigned_tasks[i] if i < len(env.assigned_tasks) else assign_task(env)[i]
         has_task = bool(assigned_task)
         current_goal = env.goal_array[i] if i < len(env.goal_array) else None
         path_length = float("inf")
@@ -127,8 +137,16 @@ def detect_actions(env):
         avail_actions_list.append(sorted_avail_actions)
         actions.append(None)
 
+    count = 0
     row_avail_actions_list = copy.deepcopy(avail_actions_list)
     while current_priority < env.agent_num:
+        # count += 1
+        # if count > 10000:
+        #     # 無限ループ防止
+        #     for i in range(env.agent_num):
+        #         if actions[i] is None:
+        #             actions[i] = -1
+        #     break
         # 優先度順にエージェントの行動を決定
         # 衝突しない可能な行動が見つからなかった場合、current_priorityを減らして一つ上の優先度のエージェントの行動を再選択する
         agent_idx, _ = priority_order[current_priority]
