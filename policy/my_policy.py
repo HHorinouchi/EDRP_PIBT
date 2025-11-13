@@ -149,7 +149,7 @@ def detect_actions(env):
             # occupied_nodesにnext_nodeが存在し、かつその占有ステップ数がneeded_stepと5tep以内の誤差しかない場合、衝突するので次の行動を評価
             # occupied_nodes: List[(node:int, step:float)]
             for occupied_node, occupied_step in occupied_nodes:
-                if occupied_node == next_node and abs(occupied_step - needed_step) <= 3:
+                if occupied_node == next_node and (abs(occupied_step - needed_step) <= 3 or occupied_step == -1):
                     # 衝突が発生した場合、次の行動を評価
                     conflict = True
                     avail_actions.remove(action)
@@ -179,7 +179,7 @@ def detect_actions(env):
                 actions[agent_idx] = -1
                 current_priority += 1
                 # ノードの占有状況を更新
-                occupied_nodes[agent_idx] = (next_node, needed_step)
+                occupied_nodes[agent_idx] = (env.current_start[agent_idx], -1)
                 # エッジの占有状況は更新しない（停止しているため）
             else:
                 # 現在のagent_idxの可能行動をリセット
