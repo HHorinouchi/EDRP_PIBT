@@ -165,6 +165,26 @@ python policy/train/train.py \
   --collision bounceback \
   --task-density 1.0
 ```
+GPUでの実行について
+
+- 設定: T=80, K=16, N=5（総エピソード ≒ 80 × 16 × 5 = 6400）
+```bash
+python policy/train/train_by_gpu.py \
+  --iterations 80 \
+  --population 16 \
+  --episodes-per-candidate 5 \
+  --eval-episodes 5 \
+  --seed 0 \
+  --map-name map_3x3 \
+  --agent-num 3 \
+  --speed 1.0 \
+  --time-limit 300 \
+  --collision bounceback \
+  --task-density 1.0 \
+  --workers 4
+```
+`train_by_gpu.py` は ES の線形代数部分を CUDA/MPS/CPU から自動選択して実行し、rollout は CPU 側で `--workers` 並列を活用します。GPU を使うには対応した PyTorch CUDA/MPS ビルドを事前にセットアップしてください。
+
 
 ## 学習安定化とロギング
 

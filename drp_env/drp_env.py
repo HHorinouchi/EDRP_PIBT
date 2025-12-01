@@ -457,6 +457,7 @@ class DrpEnv(gym.Env):
 		return r_i
 
 	def render(self, mode='human'):
+		self.ee_env.enable_rendering()
 		self.ee_env.plot_map_dynamic(
 			self.visu_delay,self.obs_current_chache,
 			self.obs,self.goal_array,

@@ -140,13 +140,13 @@ def detect_actions(env):
     count = 0
     row_avail_actions_list = copy.deepcopy(avail_actions_list)
     while current_priority < env.agent_num:
-        # count += 1
-        # if count > 10000:
-        #     # 無限ループ防止
-        #     for i in range(env.agent_num):
-        #         if actions[i] is None:
-        #             actions[i] = -1
-        #     break
+        count += 1
+        if count > 10000:
+            # 無限ループ防止
+            for i in range(env.agent_num):
+                if actions[i] is None:
+                    actions[i] = -1
+            break
         # 優先度順にエージェントの行動を決定
         # 衝突しない可能な行動が見つからなかった場合、current_priorityを減らして一つ上の優先度のエージェントの行動を再選択する
         agent_idx, _ = priority_order[current_priority]

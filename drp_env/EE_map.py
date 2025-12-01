@@ -30,12 +30,10 @@ class MapMake():
 		base_nodes = [0,2]
 		self.base_nodes = base_nodes
 		self.enable_render = enable_render
+		self.fig1 = None
+		self.ax3 = None
 		if self.enable_render:
-			self.fig1 = plt.figure()
-			self.ax3 = self.fig1.add_subplot(111)
-		else:
-			self.fig1 = None
-			self.ax3 = None
+			self._init_canvas()
 		self.map_name = map_name
 		map_dir = MAP_PARENT_DIR+map_name
 		node_file_name, edge_file_name = map_dir+'/node', map_dir+'/edge'
@@ -154,13 +152,24 @@ class MapMake():
 		return self.G, self.pos, self.edge_labels
 
 
+	def _init_canvas(self):
+		if self.fig1 is None or self.ax3 is None:
+			self.fig1 = plt.figure()
+			self.ax3 = self.fig1.add_subplot(111)
+		self.enable_render = True
+
+	def enable_rendering(self):
+		"""Lazily allocate Matplotlib canvas when render() is requested."""
+		if not self.enable_render:
+			self._init_canvas()
+
 	def draw_weighted_graph(self, G ,pos):
 		if not self.enable_render:
 			return
 		nx.draw_networkx_nodes(G, pos, node_size=500, node_color='skyblue',edgecolors='skyblue') #ノードを描画
 		nx.draw_networkx_edges(G, pos, width=1) #エッジを描画
 		nx.draw_networkx_labels(G, pos) #（ノードの）ラベルを描画
-		nx.draw_networkx_edge_labels(G, pos, edge_labels=self.edge_labels) #エッジのラベルを描画
+		# nx.draw_networkx_edge_labels(G, pos, edge_labels=self.edge_labels)  # エッジのラベルを非表示（描画しない）
 		#nx.draw_networkx_node_labels(G, pos, node_labels=node_labels) #エッジのラベルを描画
 		nx.draw_networkx(self.G, with_labels = True,pos=self.pos,alpha=0.2, node_size=170, node_color='lightblue')
       
@@ -169,6 +178,8 @@ class MapMake():
 		self.agent_num = agent_num
 		if not self.enable_render:
 			return
+		if self.fig1 is None or self.ax3 is None:
+			self._init_canvas()
 		
 		#for i in range(self.goods):
 			#ax3.scatter(  self.pos[self.base_nodes[0]][0]-0.5, self.pos[self.base_nodes[0]][1]-i*1.3 , alpha=1, s=500, marker='*',c='grey')

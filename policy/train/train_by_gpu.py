@@ -32,7 +32,7 @@ from policy.my_policy import (  # noqa: E402
 
 # Base environment configuration (single-map specialization by default)
 ENV_CONFIG = dict(
-    agent_num=3,
+    agent_num=10,
     speed=1.0,
     start_ori_array=[],
     goal_array=[],
@@ -42,7 +42,7 @@ ENV_CONFIG = dict(
     collision="bounceback",
     task_flag=True,
     reward_list={"goal": 100, "collision": -10, "wait": -10, "move": -1},
-    map_name="map_3x3",
+    map_name="map_shibuya",
     task_density=1.0,
 )
 
