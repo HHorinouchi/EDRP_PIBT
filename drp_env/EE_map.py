@@ -23,14 +23,19 @@ UNREAL_MAP = [
 
 class MapMake():
 
-	def __init__(self, agent_num, start_ori_array, goal_array, map_name):
+	def __init__(self, agent_num, start_ori_array, goal_array, map_name, enable_render=False):
 		print('MapMake initialized')
 		self.agent_num = agent_num
 
 		base_nodes = [0,2]
 		self.base_nodes = base_nodes
-		self.fig1 = plt.figure()
-		self.ax3 = self.fig1.add_subplot(111)
+		self.enable_render = enable_render
+		if self.enable_render:
+			self.fig1 = plt.figure()
+			self.ax3 = self.fig1.add_subplot(111)
+		else:
+			self.fig1 = None
+			self.ax3 = None
 		self.map_name = map_name
 		map_dir = MAP_PARENT_DIR+map_name
 		node_file_name, edge_file_name = map_dir+'/node', map_dir+'/edge'
@@ -78,11 +83,11 @@ class MapMake():
   
 	def random_goal(self):
 		self.goal_array = []
-		# G_nodes_copy=copy.deepcopy(list(self.G.nodes()))
+		# ゴールは重複を許してサンプリング（開始位置のユニーク性とは独立）
+		nodes = copy.deepcopy(list(self.G.nodes()))
 		for i in range(self.agent_num):
-			random_node = np.random.choice(self.G_nodes_copy)
+			random_node = np.random.choice(nodes)
 			self.goal_array.append(random_node)
-			self.G_nodes_copy.remove(random_node)
 
 	def read_nodes_csv(self, node, edge):
 		csv_nodes_source = []
@@ -134,15 +139,24 @@ class MapMake():
 		G.add_nodes_from(csv_nodes_number)                                 
 		G.add_edges_from(csv_edges)
 		self.pos = csv_nodes_pos
-		G.add_weighted_edges_from(csv_edges_weights) #(始点，終点，重み)でエッジを設定
-		self.edge_labels = {(i, j): int(w['weight']) for i, j, w in G.edges(data=True)} #エッジラベルの描画時に'weight'の表示を無くすための工夫
-		self.G=G
+		# build base edge weights dict (undirected key)
+		self.base_edge_weight = {}
+		for (u, v, w) in csv_edges_weights:
+			key = (min(u, v), max(u, v))
+			self.base_edge_weight[key] = float(w)
 
+		# add edges with weights
+		G.add_weighted_edges_from(csv_edges_weights) #(始点，終点，重み)でエッジを設定
+		self.edge_penalty = {}
+		self.edge_labels = {(i, j): float(w['weight']) for i, j, w in G.edges(data=True)} #可視化用のラベル
+		self.G=G
 
 		return self.G, self.pos, self.edge_labels
 
 
 	def draw_weighted_graph(self, G ,pos):
+		if not self.enable_render:
+			return
 		nx.draw_networkx_nodes(G, pos, node_size=500, node_color='skyblue',edgecolors='skyblue') #ノードを描画
 		nx.draw_networkx_edges(G, pos, width=1) #エッジを描画
 		nx.draw_networkx_labels(G, pos) #（ノードの）ラベルを描画
@@ -153,6 +167,8 @@ class MapMake():
 
 	def plot_map_dynamic(self, delay ,obs_old, obs, goal_array, agent_num, joint_action_old, reach_account, step, episode, tasklist, assigned_task):# a must be a angle !!!list!!!
 		self.agent_num = agent_num
+		if not self.enable_render:
+			return
 		
 		#for i in range(self.goods):
 			#ax3.scatter(  self.pos[self.base_nodes[0]][0]-0.5, self.pos[self.base_nodes[0]][1]-i*1.3 , alpha=1, s=500, marker='*',c='grey')
@@ -260,20 +276,39 @@ class MapMake():
 
 	def collision_detect(self, obs_prepare):
 		collision_flag = 0
-		for i in range(self.agent_num-1):
+		pairs = []
+		for i in range(self.agent_num - 1):
 			pos_i = [obs_prepare[i][0], obs_prepare[i][1]]
-			#print("pos_i",i,pos_i)
-			for j in range(i+1, self.agent_num):
+			for j in range(i + 1, self.agent_num):
 				pos_j = [obs_prepare[j][0], obs_prepare[j][1]]
-				#print("pos_j",j,pos_j)
-				distance_ij = math.dist(pos_i, pos_j) 
-				#print( "distance i j",distance_ij)
-
-				if distance_ij<5:
+				distance_ij = math.dist(pos_i, pos_j)
+				if distance_ij < 5:
 					collision_flag = 1
-					print('!!!collision!!! with agent',i,j)
-		
+					pairs.append((i, j))
+					print('!!!collision!!! with agent', i, j)
+		# Save last collided pairs so env can apply penalties to associated edges
+		self.last_collisions = pairs
 		return collision_flag
+
+	def add_collision_penalty(self, edges, penalty=5.0):
+		"""
+		Increase cost of given undirected edges. `edges` is list of (u, v).
+		"""
+		if not hasattr(self, "base_edge_weight"):
+			return
+		if not hasattr(self, "edge_penalty"):
+			self.edge_penalty = {}
+		for (u, v) in edges:
+			key = (min(int(u), int(v)), max(int(u), int(v)))
+			base = self.base_edge_weight.get(key, None)
+			if base is None:
+				continue
+			self.edge_penalty[key] = self.edge_penalty.get(key, 0.0) + float(penalty)
+			new_w = base + self.edge_penalty[key]
+			if self.G.has_edge(u, v):
+				self.G[u][v]["weight"] = new_w
+		# refresh labels (for visualization)
+		self.edge_labels = {(i, j): float(w['weight']) for i, j, w in self.G.edges(data=True)}
 
 	# create one task
 	def create_task(self, timelimit):
@@ -289,9 +324,11 @@ class MapMake():
 		tasklist=[]
 		for i in range(timelimit):
 			tasklist_by_step=[]
-			random_num = 1
-			for i in range(random_num): 	#random_num is a number greater than or equal to 0 determined
-											#with probability by agent_num and task_density
+			# sample number of tasks per step: Poisson with mean = task_density
+			random_num = int(np.random.poisson(max(task_density, 0.0)))
+			# cap to avoid extreme bursts
+			random_num = max(0, min(random_num, agent_num))
+			for _ in range(random_num):
 				tasklist_by_step.append(self.create_task(timelimit))
 			tasklist.append(tasklist_by_step)
 			#Add one task per step as an initial implementation
@@ -317,4 +354,3 @@ if __name__ == '__main__':
     
     Map.plot_map(pos) # a must be a angle !!!list!!!
 """
-

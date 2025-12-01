@@ -23,7 +23,8 @@ class DrpEnv(gym.Env):
 			collision,
 			map_name="map_3x3",
 			reward_list={"goal": 100, "collision": -10, "wait": -10, "move": -1},
-			task_flag=False
+			task_flag=False,
+			task_density=1.0
 		  ):
 		self.agent_num = agent_num
 		self.n_agents = agent_num # for epymarl
@@ -44,6 +45,7 @@ class DrpEnv(gym.Env):
 		self.collision = collision
 
 		self.time_limit = time_limit
+		self.task_density = task_density
 
 		self.colli_distan_value = 0.1
 		self.r_flag = 0
@@ -84,8 +86,8 @@ class DrpEnv(gym.Env):
 		self.assigned_list=[]#未実行のタスクとエージェントの割り当て表
 		self.task_num = self.agent_num*2 # for tasklist, each agent can have 2 tasks at most
 		#for rendering
-		#if self.is_tasklist:
-		#	self.taskgui=GUI_tasklist()
+		if self.is_tasklist:
+			self.taskgui=GUI_tasklist()
 
 	def get_obs(self):
 		return self.obs
@@ -123,7 +125,14 @@ class DrpEnv(gym.Env):
 			self.current_tasklist=[]
 			#self.assigned_tasks[i] is a task assigned to agent i
 			self.assigned_tasks=[[] for _ in range(self.agent_num)] 
-			self.alltasks = self.ee_env.create_tasklist(self.time_limit, self.agent_num, 1)
+			self.assigned_list=[]
+			self.alltasks = self.ee_env.create_tasklist(self.time_limit, self.agent_num, self.task_density)
+			self.alltasks_flat = [task for step_tasks in self.alltasks for task in step_tasks]
+			self.next_task_idx = 0
+			while len(self.current_tasklist) < self.task_num and self.next_task_idx < len(self.alltasks_flat):
+				self.current_tasklist.append(self.alltasks_flat[self.next_task_idx])
+				self.assigned_list.append(-1)
+				self.next_task_idx += 1
 
 		#initialize obs
 		self.obs = tuple(np.array([self.pos[self.start_ori_array[i]][0], self.pos[self.start_ori_array[i]][1], self.start_ori_array[i], self.goal_array[i]]) for i in range(self.agent_num))
@@ -265,6 +274,27 @@ class DrpEnv(gym.Env):
 			info["collision"] = True
 			#obs = self.obs_manager.calc_obs()
 			ri_array = [collision_reward for _ in range(self.agent_num)]
+
+			# Dynamically increase edge costs around collision to avoid reusing them
+			try:
+				pairs = getattr(self.ee_env, "last_collisions", [])
+				edges_to_penalize = []
+				for (ai, aj) in pairs:
+					for k in (ai, aj):
+						start = self.current_start[k] if k < len(self.current_start) else None
+						next_goal = self.current_goal_prepare[k] if k < len(self.current_goal_prepare) else None
+						if start is not None and next_goal is not None:
+							# penalize the attempted traversal edge
+							edges_to_penalize.append((int(start), int(next_goal)))
+						elif start is not None:
+							# fallback: penalize all incident edges to the collision node
+							for nb in self.G.neighbors(int(start)):
+								edges_to_penalize.append((int(start), int(nb)))
+				if edges_to_penalize:
+					self.add_edge_penalty(edges_to_penalize, penalty=5.0)
+			except Exception:
+				# do not break episode due to penalty bookkeeping issues
+				pass
 			
 			# return obs, [collision_reward for _ in range(self.agent_num)], self.terminated, info 
 			
@@ -293,12 +323,10 @@ class DrpEnv(gym.Env):
 			#obs = self.obs_manager.calc_obs()
 
 		if self.is_tasklist:
-			# add tasks(now, add only one task by step)
-			for i in range(len(self.alltasks[self.step_account-1])):
-				#if len(self.current_tasklist) < self.task_num:
-				new_task = self.alltasks[self.step_account-1][i]
-				self.current_tasklist.append(new_task)
+			while len(self.current_tasklist) < self.task_num and self.next_task_idx < len(self.alltasks_flat):
+				self.current_tasklist.append(self.alltasks_flat[self.next_task_idx])
 				self.assigned_list.append(-1) # -1 means unassigned
+				self.next_task_idx += 1
 
 			# remove the task from the list if it has been completed
 			for i in range(self.agent_num):
@@ -348,6 +376,10 @@ class DrpEnv(gym.Env):
 				self.obs_onehot[i][int(self.goal_array[i])+len(list(self.G.nodes()))] = 1
 
 			self.obs = tuple([np.array(i) for i in self.obs_prepare])
+			while len(self.current_tasklist) < self.task_num and self.next_task_idx < len(self.alltasks_flat):
+				self.current_tasklist.append(self.alltasks_flat[self.next_task_idx])
+				self.assigned_list.append(-1) # -1 means unassigned
+				self.next_task_idx += 1
 
 		obs = self.obs_manager.calc_obs()
 		print(self.goal_array, self.obs[0][3],self.obs[1][3])
@@ -468,6 +500,40 @@ class DrpEnv(gym.Env):
 			pos_list.append(pos)
 
 		return pos_list
+
+	def get_node_info(self):
+		"""List nodes with positions."""
+		return [{"id": int(n), "pos": list(self.pos[int(n)])} for n in self.G.nodes()]
+
+	def get_edge_info(self):
+		"""List edges with current weight, base weight, and accumulated penalty."""
+		edges = []
+		base = getattr(self.ee_env, "base_edge_weight", {})
+		penalty = getattr(self.ee_env, "edge_penalty", {})
+		for u, v, data in self.G.edges(data=True):
+			key = (min(int(u), int(v)), max(int(u), int(v)))
+			bw = float(base.get(key, float(data.get("weight", 0.0))))
+			pen = float(penalty.get(key, 0.0))
+			edges.append(
+				{
+					"u": int(u),
+					"v": int(v),
+					"weight": float(data.get("weight", 0.0)),
+					"base_weight": bw,
+					"penalty": pen,
+				}
+			)
+		return edges
+
+	def get_adjacency_list(self):
+		"""Adjacency list (neighbors for each node)."""
+		return {int(n): [int(nb) for nb in self.G.neighbors(n)] for n in self.G.nodes()}
+
+	def add_edge_penalty(self, edges, penalty=5.0):
+		"""Increase traversal cost for specified undirected edges [(u,v), ...]."""
+		if hasattr(self.ee_env, "add_collision_penalty"):
+			self.ee_env.add_collision_penalty(edges, penalty)
+		return
 
 	def get_path_length(self, start, goal):
 		if start == goal:

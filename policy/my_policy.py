@@ -1,6 +1,9 @@
 import copy
+import json
 import math
 import random
+from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 import gym
@@ -13,22 +16,106 @@ TEAM_NAME = "your_team_name"
 ##############################
 
 
+@dataclass
+class PriorityParams:
+    """
+    Parameters for detect_actions priority calculation.
+
+    goal_weight:     Weight for distance to drop when currently heading to drop.
+    pick_weight:     Weight for distance to pick when still before pickup.
+    drop_weight:     Weight for distance pick->drop when still before pickup.
+    idle_bias:       Additive bias applied only when the agent has no task.
+    idle_penalty:    Base score given to agents with no task (keeps them last).
+    """
+
+    goal_weight: float = 1.0
+    pick_weight: float = 1.0
+    drop_weight: float = 1.0
+    idle_bias: float = 0.0
+    idle_penalty: float = 1000.0
+
+    # Task assignment scoring weights
+    assign_pick_weight: float = 1.0
+    assign_drop_weight: float = 0.0
+    assign_idle_bias: float = 0.0
+
+    # Global/system-level weights
+    congestion_weight: float = 0.0  # penalize local congestion around an agent
+    load_balance_weight: float = 0.0  # bias assignment based on system unassigned ratio
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> "PriorityParams":
+        return cls(
+            goal_weight=float(data.get("goal_weight", cls.goal_weight)),
+            pick_weight=float(data.get("pick_weight", cls.pick_weight)),
+            drop_weight=float(data.get("drop_weight", cls.drop_weight)),
+            idle_bias=float(data.get("idle_bias", cls.idle_bias)),
+            idle_penalty=float(data.get("idle_penalty", cls.idle_penalty)),
+            assign_pick_weight=float(data.get("assign_pick_weight", cls.assign_pick_weight)),
+            assign_drop_weight=float(data.get("assign_drop_weight", cls.assign_drop_weight)),
+            assign_idle_bias=float(data.get("assign_idle_bias", cls.assign_idle_bias)),
+            congestion_weight=float(data.get("congestion_weight", cls.congestion_weight)),
+            load_balance_weight=float(data.get("load_balance_weight", cls.load_balance_weight)),
+        )
+
+
+_PRIORITY_PARAMS_PATH = Path(__file__).with_name("priority_params.json")
+_PRIORITY_PARAMS = None
+
+
+def _load_priority_params() -> PriorityParams:
+    if not _PRIORITY_PARAMS_PATH.exists():
+        return PriorityParams()
+    try:
+        data = json.loads(_PRIORITY_PARAMS_PATH.read_text())
+        return PriorityParams.from_dict(data)
+    except Exception:
+        # Fall back to defaults if the file is malformed
+        return PriorityParams()
+
+
+def get_priority_params() -> PriorityParams:
+    """Return the in-memory priority parameters (defaults if unset)."""
+    return _PRIORITY_PARAMS or PriorityParams()
+
+
+def set_priority_params(params: PriorityParams) -> None:
+    """Update the priority parameters used inside detect_actions."""
+    global _PRIORITY_PARAMS
+    _PRIORITY_PARAMS = params
+
+
+def save_priority_params(params: PriorityParams) -> None:
+    """Persist priority parameters so that future runs can reuse them."""
+    payload = json.dumps(asdict(params), indent=2)
+    _PRIORITY_PARAMS_PATH.write_text(payload)
+
+
+# Load parameters once on import so that training outputs are picked up automatically.
+set_priority_params(_load_priority_params())
+
+
 def policy(obs, env):
     actions = detect_actions(env)
     task_assign = assign_task(env)
     return actions, task_assign
 
 def assign_task(env):
-    """Greedy task assignment based on travel distance to the next pick node."""
-    # Use original task indices to avoid index-shift bugs when popping from local copies.
-    # We will select tasks by their index in env.current_tasklist (and env.assigned_list)
+    """Task assignment with tunable priority parameters."""
     task_assign = [-1] * env.agent_num
 
-    if not hasattr(env, 'current_tasklist') or len(env.current_tasklist) < env.agent_num:
+    if not hasattr(env, "current_tasklist") or len(env.current_tasklist) == 0:
         return task_assign
+
+    params = get_priority_params()
 
     # available_indices are indices in env.current_tasklist that are unassigned
     available_indices = [idx for idx, a in enumerate(env.assigned_list) if a == -1]
+
+    # system-level unassigned task ratio (0.0 if no tasks)
+    total_slots = len(env.assigned_list) if hasattr(env, "assigned_list") else 0
+    unassigned_cnt = sum(1 for a in env.assigned_list if a == -1) if total_slots > 0 else 0
+    unassigned_ratio = float(unassigned_cnt) / float(total_slots) if total_slots > 0 else 0.0
 
     for i in range(env.agent_num):
         # skip if agent already has an assigned task
@@ -36,7 +123,13 @@ def assign_task(env):
             continue
 
         best_task_idx = -1
-        best_dist = float('inf')
+        best_score = float("inf")
+
+        base_node = (
+            env.current_start[i]
+            if i < len(env.current_start) and env.current_start[i] is not None
+            else env.goal_array[i]
+        )
 
         for idx in list(available_indices):
             # idx indexes into env.current_tasklist
@@ -45,15 +138,31 @@ def assign_task(env):
             except Exception:
                 continue
 
-            # task expected as [pick_node, drop_node]
-            pick_node = task[0]
-            # measure distance from agent's current goal (or location) to pick_node
-            # use env.get_path_length which may return None
-            path_length = env.get_path_length(env.goal_array[i], pick_node)
-            if path_length is None:
+            # task expected as [pick_node, drop_node, (optional deadline)]
+            if len(task) < 2:
                 continue
-            if path_length < best_dist:
-                best_dist = path_length
+
+            pick_node = task[0]
+            drop_node = task[1]
+
+            # distances for scoring
+            dist_to_pick = env.get_path_length(base_node, pick_node)
+            dist_pick_to_drop = env.get_path_length(pick_node, drop_node)
+
+            if dist_to_pick is None:
+                continue
+            if dist_pick_to_drop is None:
+                dist_pick_to_drop = float("inf")
+
+            score = (
+                params.assign_pick_weight * float(dist_to_pick)
+                + params.assign_drop_weight * float(dist_pick_to_drop)
+                + params.assign_idle_bias
+                + params.load_balance_weight * float(unassigned_ratio)
+            )
+
+            if score < best_score:
+                best_score = score
                 best_task_idx = idx
 
         if best_task_idx != -1:
@@ -69,26 +178,17 @@ def detect_actions(env):
     各エージェントの割り当てられたタスクに基づき、そのタスク完了にかかる最短経路で優先順位を決定する
     """
     actions = []
-    shortest_path_distances = []
     if env.goal_array is None:
         return [-1]*env.agent_num
     # 各エージェントの最短経路距離を計算
+    priority_scores = []
     for i in range(env.agent_num):
         assigned_task = env.assigned_tasks[i] if i < len(env.assigned_tasks) else []
-        has_task = bool(assigned_task)
-        current_goal = env.goal_array[i] if i < len(env.goal_array) else None
-        path_length = float("inf")
-        if has_task and len(assigned_task) >= 2:
-            pick_node = assigned_task[0]
-            drop_node = assigned_task[1]
-            if current_goal is not None and current_goal == drop_node:
-                path_length = calculate_goal_path_length(env, i, assigned_task)
-            elif current_goal is not None and current_goal == pick_node:
-                path_length = calculate_task_path_length(env, i, assigned_task)
-        shortest_path_distances.append((i, path_length))
+        score = _priority_score(env, i, assigned_task)
+        priority_scores.append((i, score))
 
-    # 最短経路距離に基づき優先順位を決定（距離が短いほど高優先度）
-    priority_order = sorted(shortest_path_distances, key=lambda x: x[1])
+    # 最短経路距離（または重みづけ距離）に基づき優先順位を決定（距離が短いほど高優先度）
+    priority_order = sorted(priority_scores, key=lambda x: x[1])
 
     # 優先度順に行動を決定。高優先度のエージェントと衝突しない行動を選択する
     # 基本的には最短経路上の行動を選択するが、衝突する場合は他の行動を選択
@@ -128,6 +228,7 @@ def detect_actions(env):
         actions.append(None)
 
     row_avail_actions_list = copy.deepcopy(avail_actions_list)
+    best_priority = 0
     while current_priority < env.agent_num:
         # 優先度順にエージェントの行動を決定
         # 衝突しない可能な行動が見つからなかった場合、current_priorityを減らして一つ上の優先度のエージェントの行動を再選択する
@@ -174,10 +275,11 @@ def detect_actions(env):
             # 衝突が避けられない場合可能な行動を補填し、一つ上の優先度のエージェントの行動を再選択
 
             # 最上位優先度エージェントの場合、停止を選択
-            if current_priority == 0:
+            if current_priority == best_priority:
                 # 最優先エージェントで可能な行動がない場合、停止を選択
                 actions[agent_idx] = -1
                 current_priority += 1
+                best_priority += 1
                 # ノードの占有状況を更新
                 occupied_nodes[agent_idx] = (env.current_start[agent_idx], -1)
                 # エッジの占有状況は更新しない（停止しているため）
@@ -236,3 +338,40 @@ def calculate_steps_to_node(env, agent_idx, target_node):
 
     steps_needed = math.ceil(euclidean_distance / env.speed)
     return steps_needed
+
+
+def _agent_congestion(env, agent_idx: int, radius: float = 5.0) -> float:
+    """Count other agents within given radius of agent_idx."""
+    ax, ay = env.obs[agent_idx][:2]
+    cnt = 0
+    for j in range(env.agent_num):
+        if j == agent_idx:
+            continue
+        bx, by = env.obs[j][:2]
+        if math.hypot(bx - ax, by - ay) <= radius:
+            cnt += 1
+    return float(cnt)
+
+
+def _priority_score(env, agent_idx: int, assigned_task: List[int]) -> float:
+    """Compute the priority score for an agent given the current policy parameters."""
+    params = get_priority_params()
+    has_task = bool(assigned_task)
+    if not has_task or len(assigned_task) < 2:
+        return params.idle_penalty + params.idle_bias
+
+    pick_node = assigned_task[0]
+    drop_node = assigned_task[1]
+    base_node = env.current_start[agent_idx] if env.current_start[agent_idx] is not None else env.goal_array[agent_idx]
+    current_goal = env.goal_array[agent_idx] if agent_idx < len(env.goal_array) else None
+
+    if current_goal is not None and current_goal == drop_node:
+        dist_goal = env.get_path_length(base_node, drop_node)
+        dist_goal = dist_goal if dist_goal is not None else float("inf")
+        return params.goal_weight * dist_goal + params.congestion_weight * _agent_congestion(env, agent_idx)
+
+    dist_pick = env.get_path_length(base_node, pick_node)
+    dist_drop = env.get_path_length(pick_node, drop_node)
+    dist_pick = dist_pick if dist_pick is not None else float("inf")
+    dist_drop = dist_drop if dist_drop is not None else float("inf")
+    return params.pick_weight * dist_pick + params.drop_weight * dist_drop + params.idle_bias + params.congestion_weight * _agent_congestion(env, agent_idx)
