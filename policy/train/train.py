@@ -447,4 +447,9 @@ def main():
 
 
 if __name__ == "__main__":
+    import time
+    _t0 = time.time()
     main()
+    _elapsed = time.time() - _t0
+    print("==== Execution time ====")
+    print(f"Elapsed: {_elapsed:.2f} seconds")
