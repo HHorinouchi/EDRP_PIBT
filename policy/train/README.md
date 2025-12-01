@@ -203,6 +203,40 @@ python policy/train/train.py \
 
 episodes_per_candidate は 5〜10 を推奨。報酬ばらつきが大きい場合は更に増やしてください。
 
+## GPU 版（train_by_gpu.py）の実行例
+
+GPU（CUDA/MPS）を自動検出し、ES のノイズ生成・更新計算を GPU で行うバージョンです（環境 rollouts は CPU。--workers で並列化可能）。
+
+バランス設定の例（CUDA/MPS/CPU を自動検出）
+```bash
+python policy/train/train_by_gpu.py \
+  --iterations 60 \
+  --population 12 \
+  --episodes-per-candidate 5 \
+  --sigma 0.1 \
+  --lr 0.05 \
+  --collision-penalty -1000 \
+  --log-csv policy/train/train_log_gpu.csv \
+  --plot-png policy/train/reward_curve_gpu.png \
+  --clip-step-norm 1.0 \
+  --best-update-mode moving_avg \
+  --best-update-alpha 0.2 \
+  --best-update-gap 0.0 \
+  --eval-episodes 5 \
+  --seed 0 \
+  --map-name map_3x3 \
+  --agent-num 3 \
+  --speed 1.0 \
+  --time-limit 300 \
+  --collision bounceback \
+  --task-density 1.0 \
+  --workers 4
+```
+
+- CUDA を使うには対応ビルドの PyTorch が必要です（https://pytorch.org/get-started/locally/）。
+- Apple Silicon では MPS が自動検出されます（一部演算のみ加速）。  
+- rollouts は CPU 実行のため、--workers により episodes-per-candidate の並列度を上げると効果的です。
+
 ## 引数一覧
 
 - `--iterations`（デフォルト: 40）: ES の反復回数
@@ -306,6 +340,36 @@ env.close()
   - ドメインランダム化の範囲（マップ/エージェント数/タスク密度など）を見直すか、評価時は固定条件で比較してください。
 
 ---
+
+## GPU 対応について（設計方針と現状の限界）
+
+結論:
+- 現行の train.py は環境遷移（env.step）と Python ループが支配的で、GPU の恩恵を受けにくい構成です（ES の線形代数は小規模・低次元）。
+- そのため「GPUでの大幅な短縮」を目指すには、環境やポリシーの計算を JAX/PyTorch などのフレームワークに寄せ、ベクトル化・JIT を活用した再設計が必要です。
+
+ポイント:
+- macOS では一般に CUDA GPU を使えません（NVIDIA ドライバ非対応）。Apple Silicon であれば PyTorch(MPS) / JAX(Metal) で一部のテンソル計算は加速可能ですが、本リポジトリは現状 NumPy + Python 環境で、恩恵は限定的です。
+- Linux + NVIDIA GPU + CUDA 環境なら CuPy/JAX/PyTorch を導入できますが、env.step の大半は Python であり、抜本的な並列化/ベクトル化がなければ速度向上は限定的です。
+
+現実的なステップ（優先度順）:
+1) まずはCPU並列での高速化（推奨）
+   - episodes-per-candidate の各エピソードをマルチプロセスで並列化（将来改善）。Python 並列化でも大幅に短縮可能。
+2) ES部分だけをCuPyで置換（限定的な効果）
+   - Linux + CUDA 前提で `pip install cupy-cuda11x`（環境に合うビルドを選択）。
+   - train.py 内の ES 計算（ノイズ生成、正規化、内積）を `xp = cupy` に切替。ただし vector_to_params / I/O は NumPy へ戻す必要があり、効果は限定的。
+3) 本格GPU化（推奨だが大改修）
+   - JAX: rollout/policy/簡易環境を `jit`/`vmap` 可能な関数に再設計し、GPU/TPUでバッチ展開。
+   - PyTorch: 環境ダイナミクスをテンソル化し、MPS/CUDA上でバッチ並列。policy計算や経路長評価もテンソル化が必要。
+
+Docker + NVIDIA（将来GPU対応の土台作り）:
+- ホスト: NVIDIA Driver + nvidia-container-toolkit
+- ベースイメージ例:
+  - FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+  - RUN apt-get update && apt-get install -y python3-pip && pip install cupy-cuda12x jax[cuda12_pip] torch --extra-index-url https://download.pytorch.org/whl/cu121
+- 実行: docker run --gpus all ...
+
+注意:
+- まずは「CPU並列（マルチプロセス）化」で効果を出し、その後に JAX/PyTorch でベクトル化/JIT を検討するのが現実的な順序です。必要であれば、並列実装のパッチを追加可能です。
 
 ## ライセンス・注意
 
