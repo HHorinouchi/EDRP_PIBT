@@ -96,10 +96,42 @@ class DrpEnv(gym.Env):
 		return self.s
 
 	def _get_avail_agent_actions(self, agent_id, n_actions):
-		avail_actions = self.ee_env.get_avail_action_fun(self.obs[agent_id], self.current_start[agent_id], self.current_goal[agent_id], self.goal_array[agent_id])
+		avail_actions = self.ee_env.get_avail_action_fun(
+			self.obs[agent_id],
+			self.current_start[agent_id],
+			self.current_goal[agent_id],
+			self.goal_array[agent_id],
+		)
+
+		# Allow idle agents (no remaining task to serve) to keep moving even if they reached their idle goal.
+		if self.is_tasklist and agent_id < len(self.assigned_tasks):
+			if len(self.assigned_tasks[agent_id]) == 0:
+				at_node = (
+					self.current_goal[agent_id] is None
+					or self.current_goal[agent_id] == self.current_start[agent_id]
+				)
+				if at_node:
+					current_node = self.current_start[agent_id]
+					if current_node is None and len(self.obs) > agent_id:
+						current_node = int(self.obs[agent_id][2])
+					if current_node is not None:
+						neighbors = list(self.G.neighbors(int(current_node)))
+						# include wait action at current node
+						neighbors.append(int(current_node))
+						for nxt in neighbors:
+							if nxt not in avail_actions:
+								avail_actions.append(int(nxt))
+
+		avail_actions = [int(a) for a in avail_actions if a is not None]
+		if not avail_actions:
+			fallback = self.current_start[agent_id]
+			if fallback is None:
+				fallback = 0
+			avail_actions.append(int(fallback))
+		# remove duplicates while preserving order
+		seen = set()
+		avail_actions = [a for a in avail_actions if not (a in seen or seen.add(a))]
 		avail_actions_one_hot = np.zeros(n_actions)
-		if avail_actions[0] == None:
-			avail_actions[0] = 0
 		avail_actions_one_hot[avail_actions] = 1
 		return avail_actions_one_hot, avail_actions
 	
@@ -129,10 +161,6 @@ class DrpEnv(gym.Env):
 			self.alltasks = self.ee_env.create_tasklist(self.time_limit, self.agent_num, self.task_density)
 			self.alltasks_flat = [task for step_tasks in self.alltasks for task in step_tasks]
 			self.next_task_idx = 0
-			while len(self.current_tasklist) < self.task_num and self.next_task_idx < len(self.alltasks_flat):
-				self.current_tasklist.append(self.alltasks_flat[self.next_task_idx])
-				self.assigned_list.append(-1)
-				self.next_task_idx += 1
 
 		#initialize obs
 		self.obs = tuple(np.array([self.pos[self.start_ori_array[i]][0], self.pos[self.start_ori_array[i]][1], self.start_ori_array[i], self.goal_array[i]]) for i in range(self.agent_num))
@@ -336,7 +364,6 @@ class DrpEnv(gym.Env):
 						if self.goal_array[i] == self.assigned_tasks[i][1]:
 							self.assigned_tasks[i] = [] # remove the task from assigned_tasks
 							self.task_completion += 1
-						
 			# assign tasks to agents
 			for i in range(self.agent_num):
 				if (self.assigned_tasks[i] == [] or i in self.assigned_list) and task_assign[i] != -1:
@@ -369,7 +396,7 @@ class DrpEnv(gym.Env):
 						else:
 							print(self.goal_array[i], self.assigned_tasks[i])
 							raise ValueError("Error in task execution")
-						
+				
 				self.obs_prepare[i] = [self.obs[i][0], self.obs[i][1], self.start_ori_array[i], self.goal_array[i]]
 				self.obs_onehot[i] = np.zeros((1, len(list(self.G.nodes()))*2))
 				self.obs_onehot[i][int(self.start_ori_array[i])] = 1

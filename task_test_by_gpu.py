@@ -52,7 +52,7 @@ def run_episode(_idx: int, env_id: str, max_steps: int) -> Tuple[int, bool]:
     last_completion = 0
 
     for step in range(max_steps):
-        actions, task = policy(n_obs, env)
+        actions, task, count = policy(n_obs, env)
         joint_action = {"pass": actions, "task": task}
         n_obs, reward, done, info = env.step(joint_action)
 
@@ -81,7 +81,7 @@ def main():
     parser.add_argument("--episodes", type=int, default=10000)
     parser.add_argument("--workers", type=int, default=os.cpu_count() or 4)
     parser.add_argument("--max-steps", type=int, default=300)
-    parser.add_argument("--env-id", type=str, default="drp_env:drp-5agent_map_3x3-v2")
+    parser.add_argument("--env-id", type=str, default="drp_env:drp-8agent_map_shibuya-v2")
     args = parser.parse_args()
 
     print(f"Episodes: {args.episodes}, workers: {args.workers}, env: {args.env_id}")

@@ -332,19 +332,13 @@ class MapMake():
 
 	# create all tasklist
 	def create_tasklist(self, timelimit, agent_num, task_density):
-		tasklist=[]
-		for i in range(timelimit):
-			tasklist_by_step=[]
-			# sample number of tasks per step: Poisson with mean = task_density
-			random_num = int(np.random.poisson(max(task_density, 0.0)))
-			# cap to avoid extreme bursts
-			random_num = max(0, min(random_num, agent_num))
-			for _ in range(random_num):
-				tasklist_by_step.append(self.create_task(timelimit))
-			tasklist.append(tasklist_by_step)
-			#Add one task per step as an initial implementation
-
-		#print(tasklist)
+		"""Pre-generate a fixed pool of tasks (2×agent_num) for the episode."""
+		total_tasks = max(int(agent_num) * 2, 0)
+		all_tasks = [self.create_task(timelimit) for _ in range(total_tasks)]
+		steps = max(int(timelimit), 1)
+		tasklist = [[] for _ in range(steps)]
+		if all_tasks:
+			tasklist[0] = all_tasks
 		return tasklist
 	
 	def get_path_length(self, start_node, goal_node):

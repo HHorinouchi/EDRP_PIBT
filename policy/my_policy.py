@@ -300,21 +300,19 @@ def detect_actions(env):
                 next_node = action
             needed_step = calculate_steps_to_node(env, agent_idx, next_node) # エージェントが次のノードに到達するまでに必要なステップ数
             conflict = False
-            # ノードの占有状況を確認
-            # occupied_nodesにnext_nodeが存在し、かつその占有ステップ数がneeded_stepと5tep以内の誤差しかない場合、衝突するので次の行動を評価
-            # occupied_nodes: List[(node:int, step:float)]
-            for occupied_node, occupied_step in occupied_nodes:
-                if occupied_node == next_node and (abs(occupied_step - (needed_step + max(0, -action))) <= 3 or occupied_step == -1):
-                    # 衝突が発生した場合、次の行動を評価
+            for check_idx in range(current_priority):
+                higher_agent_idx, _ = priority_order[check_idx]
+                occ_node, _ = occupied_nodes[higher_agent_idx]
+                if occ_node == next_node:
                     conflict = True
                     avail_actions.remove(action)
                     break
-            for start, end in occupied_edges:
-                # 逆向きにエッジが占有されている場合に、衝突するので次の行動を評価(進む向きが一緒なら問題ない)
-                if end == env.current_start[agent_idx] and start == next_node and conflict == False:
-                    conflict = True
-                    avail_actions.remove(action)
-                    break
+                start, end = occupied_edges[higher_agent_idx]
+                if start is not None and end is not None:
+                    if end == env.current_start[agent_idx] and start == next_node:
+                        conflict = True
+                        avail_actions.remove(action)
+                        break
             if not conflict:
                 actions[agent_idx] = action
                 action_selected = True
