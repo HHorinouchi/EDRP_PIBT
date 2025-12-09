@@ -59,17 +59,25 @@ class PriorityParams:
         )
 
 
-_PRIORITY_PARAMS_PATH = Path(__file__).with_name("priority_params.json")
+_PRIORITY_PARAMS_PATH = Path(__file__).with_name("priority_params_shibuya_10.json")
 _PRIORITY_PARAMS = None
+_PRIORITY_PARAMS_LOADED_FROM_FILE = False
 
 
 def _load_priority_params() -> PriorityParams:
+    # パスが存在するかどうかを確認し、存在する場合はファイルから読み込む。
+    # ファイルが存在しない場合はデフォルト値を返すが、"ファイル読み込みフラグ"は立てない。
+    global _PRIORITY_PARAMS_LOADED_FROM_FILE
     if not _PRIORITY_PARAMS_PATH.exists():
+        _PRIORITY_PARAMS_LOADED_FROM_FILE = False
         return PriorityParams()
     try:
         data = json.loads(_PRIORITY_PARAMS_PATH.read_text())
+        _PRIORITY_PARAMS_LOADED_FROM_FILE = True
         return PriorityParams.from_dict(data)
-    except Exception:
+    except Exception as e:
+        print(f"Failed to load priority parameters: {e}")
+        _PRIORITY_PARAMS_LOADED_FROM_FILE = False
         # Fall back to defaults if the file is malformed
         return PriorityParams()
 
@@ -79,10 +87,33 @@ def get_priority_params() -> PriorityParams:
     return _PRIORITY_PARAMS or PriorityParams()
 
 
+def priority_params_exists() -> bool:
+    """Return True if priority parameters were successfully loaded from file.
+
+    This distinguishes between using default parameters (no file) and having
+    an explicit configuration file present. The requested behavior is to run
+    the policy only when such a file exists.
+    """
+    # Treat programmatically set params as present as well. During training
+    # ES rollouts call set_priority_params(...) in-memory, so require the
+    # policy to run when _PRIORITY_PARAMS is set even if no file exists.
+    if _PRIORITY_PARAMS_LOADED_FROM_FILE:
+        return True
+    return _PRIORITY_PARAMS is not None
+
+
 def set_priority_params(params: PriorityParams) -> None:
     """Update the priority parameters used inside detect_actions."""
     global _PRIORITY_PARAMS
     _PRIORITY_PARAMS = params
+    # When parameters are set programmatically (e.g. during ES training), mark
+    # them as loaded so policy() will not early-return. This allows in-memory
+    # updates via set_priority_params(...) to take effect for rollouts.
+    try:
+        global _PRIORITY_PARAMS_LOADED_FROM_FILE
+        _PRIORITY_PARAMS_LOADED_FROM_FILE = True
+    except Exception:
+        pass
 
 
 def save_priority_params(params: PriorityParams) -> None:
@@ -96,9 +127,17 @@ set_priority_params(_load_priority_params())
 
 
 def policy(obs, env):
-    actions = detect_actions(env)
+    # If priority parameters were not loaded from a file, do not run the
+    # full policy. Return a safe no-op: all agents stop and no tasks assigned.
+    if not priority_params_exists():
+        agent_num = getattr(env, "agent_num", None)
+        if agent_num is None:
+            return [], []
+        return [-1] * agent_num, [-1] * agent_num
+
+    actions, count = detect_actions(env)
     task_assign = assign_task(env)
-    return actions, task_assign
+    return actions, task_assign, count
 
 def assign_task(env):
     """Task assignment with tunable priority parameters."""
@@ -169,6 +208,7 @@ def assign_task(env):
             task_assign[i] = best_task_idx
             # reserve this task locally so another agent won't pick it in this loop
             available_indices.remove(best_task_idx)
+        
 
     return task_assign
 
@@ -198,6 +238,8 @@ def detect_actions(env):
     # 占有されるエッジを管理 List[ (from_node, to_node) ]
     occupied_edges = [(None, None)] * env.agent_num
     current_priority = 0 # 行動が決定したエージェント数
+    most_high_priority = 0  # 最も高い優先度のエージェントインデックス
+    max_wait = 4  # 最大停止ステップ数
     # 各エージェントが可能な行動をリスト化し、行動を変更するときに同じ行動を繰り返さないようにする
     avail_actions_list = []
     for i in range(env.agent_num):
@@ -224,12 +266,24 @@ def detect_actions(env):
             path_length_list.append((action, path_length))
 
         sorted_avail_actions = [action for action, _ in sorted(path_length_list, key=lambda x: x[1])]
+        for i in range(1, max_wait+1):
+            # -1, -2, ... を後ろに回す
+            # actionが-の場合、停止するステップ数が1,2,3,...と増えることを意味するため
+            sorted_avail_actions.append(-i)
         avail_actions_list.append(sorted_avail_actions)
         actions.append(None)
 
     row_avail_actions_list = copy.deepcopy(avail_actions_list)
-    best_priority = 0
+    count = 0
     while current_priority < env.agent_num:
+        count += 1
+        # if count > 10000:
+        #     # 無限ループ防止
+        #     # 可能な行動が見つからない場合、一生停止し続けてしまうため、衝突させにいく
+        #     for i in range(env.agent_num):
+        #         if actions[i] is None:
+        #             actions[i] = row_avail_actions_list[i][0]
+        #     break
         # 優先度順にエージェントの行動を決定
         # 衝突しない可能な行動が見つからなかった場合、current_priorityを減らして一つ上の優先度のエージェントの行動を再選択する
         agent_idx, _ = priority_order[current_priority]
@@ -238,9 +292,9 @@ def detect_actions(env):
         avail_actions = avail_actions_list[agent_idx]
         action_selected = False
         for action in list(avail_actions):
-            if len(row_avail_actions_list[agent_idx]) == 2: # これは、エッジ上にいるとき
+            if len(row_avail_actions_list[agent_idx]) == max_wait+1: # これは、エッジ上にいるとき
                 next_node = row_avail_actions_list[agent_idx][0]  # エッジ上にいるときは進行方向のノードにしか行けない
-            elif action == -1: # ノード上にいて、行き先がなく停止を選択するとき,next_nodeは現在ノード
+            elif action < 0: # ノード上にいて、行き先がなく停止を選択するとき,next_nodeは現在ノード
                 next_node = env.current_start[agent_idx]
             else:
                 next_node = action
@@ -250,7 +304,7 @@ def detect_actions(env):
             # occupied_nodesにnext_nodeが存在し、かつその占有ステップ数がneeded_stepと5tep以内の誤差しかない場合、衝突するので次の行動を評価
             # occupied_nodes: List[(node:int, step:float)]
             for occupied_node, occupied_step in occupied_nodes:
-                if occupied_node == next_node and (abs(occupied_step - needed_step) <= 3 or occupied_step == -1):
+                if occupied_node == next_node and (abs(occupied_step - (needed_step + max(0, -action))) <= 3 or occupied_step == -1):
                     # 衝突が発生した場合、次の行動を評価
                     conflict = True
                     avail_actions.remove(action)
@@ -266,7 +320,11 @@ def detect_actions(env):
                 action_selected = True
                 current_priority += 1
                 # ノードの占有状況を更新
-                occupied_nodes[agent_idx] = (next_node, needed_step)
+                # 停止行動を選択した場合、needed_stepにはneeded_step+1を設定（停止しているため、そのノードは次のステップまで占有される）
+                if action == -1:
+                    occupied_nodes[agent_idx] = (next_node, needed_step + 1)
+                else:
+                    occupied_nodes[agent_idx] = (next_node, needed_step)
                 # エッジの占有状況を更新
                 occupied_edges[agent_idx] = (env.current_start[agent_idx], next_node)
                 avail_actions.remove(action)
@@ -275,14 +333,17 @@ def detect_actions(env):
             # 衝突が避けられない場合可能な行動を補填し、一つ上の優先度のエージェントの行動を再選択
 
             # 最上位優先度エージェントの場合、停止を選択
-            if current_priority == best_priority:
+            if current_priority <= most_high_priority:
                 # 最優先エージェントで可能な行動がない場合、停止を選択
-                actions[agent_idx] = -1
+                actions[agent_idx] = -3
                 current_priority += 1
-                best_priority += 1
+                most_high_priority += 1
                 # ノードの占有状況を更新
-                occupied_nodes[agent_idx] = (env.current_start[agent_idx], -1)
-                # エッジの占有状況は更新しない（停止しているため）
+                occupied_nodes[agent_idx] = (env.current_start[agent_idx], needed_step + 3)
+                # エッジの占有状況を更新
+                # エージェントがエッジ上にいる場合、現在ノードから次ノードへのエッジを占有
+                if len(row_avail_actions_list[agent_idx]) == max_wait+1:
+                    occupied_edges[agent_idx] = (env.current_start[agent_idx], row_avail_actions_list[agent_idx][0])
             else:
                 # 現在のagent_idxの可能行動をリセット
                 avail_actions_list[agent_idx] = copy.deepcopy(row_avail_actions_list[agent_idx])
@@ -295,7 +356,7 @@ def detect_actions(env):
                 occupied_edges[prev_agent_idx] = (None, None)
                 continue
             
-    return actions
+    return actions, count
 
 # 現在ノードとタスクスタートノード、タスクゴールノードを用いた最短経路距離を計算（未ピックアップ）
 def calculate_task_path_length(env, agent_idx, assigned_task):
@@ -339,9 +400,25 @@ def calculate_steps_to_node(env, agent_idx, target_node):
     steps_needed = math.ceil(euclidean_distance / env.speed)
     return steps_needed
 
-
-def _agent_congestion(env, agent_idx: int, radius: float = 5.0) -> float:
+# 半径はマップの幅の1/5に設定
+def _agent_congestion(env, agent_idx: int, radius: float = None) -> float:
     """Count other agents within given radius of agent_idx."""
+    if radius is None:
+        # Prefer explicit env.map_width when available (legacy). Otherwise
+        # derive an approximate map width from node positions (env.pos)
+        mw = getattr(env, "map_width", None)
+        if mw is None:
+            try:
+                # env.pos is expected to be a dict {node: (x,y)}
+                xs = [p[0] for p in env.pos.values()]
+                ys = [p[1] for p in env.pos.values()]
+                width = max(xs) - min(xs) if xs else 1.0
+                height = max(ys) - min(ys) if ys else 1.0
+                mw = max(width, height)
+            except Exception:
+                # Fallback to a safe constant radius when nothing else is available
+                mw = 1.0
+        radius = float(mw) / 5.0
     ax, ay = env.obs[agent_idx][:2]
     cnt = 0
     for j in range(env.agent_num):

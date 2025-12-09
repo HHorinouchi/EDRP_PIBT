@@ -12,6 +12,8 @@ import time
 import math
 import numpy as np
 import concurrent.futures as futures
+import json
+from dataclasses import asdict
 
 # Local imports (repo root on path)
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -33,7 +35,7 @@ from policy.my_policy import (  # noqa: E402
 # Base environment configuration (single-map specialization by default)
 ENV_CONFIG = dict(
     agent_num=10,
-    speed=1.0,
+    speed=5.0,
     start_ori_array=[],
     goal_array=[],
     visu_delay=0.0,
@@ -41,7 +43,7 @@ ENV_CONFIG = dict(
     time_limit=300,
     collision="bounceback",
     task_flag=True,
-    reward_list={"goal": 100, "collision": -10, "wait": -10, "move": -1},
+    reward_list={"goal": 10000, "collision": -5*10*300, "wait": -10, "move": -1},
     map_name="map_shibuya",
     task_density=1.0,
 )
@@ -81,45 +83,61 @@ def sample_env_config(rng: np.random.Generator) -> dict:
         collision=collision,
         task_flag=True,
         task_density=task_density,
-        reward_list={"goal": 100, "collision": -10, "wait": -10, "move": -1},
+        reward_list={"goal": 20*time_limit, "collision": -10*agent_num*time_limit, "wait": -10, "move": -1},
         map_name=map_name,
     )
 
 def make_env_from_config(cfg: dict) -> DrpEnv:
     return DrpEnv(**cfg)
 
-# Parameter vectorization (10 dims; aligned with train.py)
+# Parameter vectorization: use exactly the 8 parameters the trainer should learn.
+# Ordered vector (len=8):
+# 0: goal_weight
+# 1: pick_weight
+# 2: drop_weight
+# 3: idle_penalty
+# 4: assign_pick_weight
+# 5: assign_drop_weight
+# 6: assign_idle_bias
+# 7: congestion_weight
 def params_to_vector(params: PriorityParams) -> np.ndarray:
     return np.array(
         [
             params.goal_weight,
             params.pick_weight,
             params.drop_weight,
-            params.idle_bias,
             params.idle_penalty,
             params.assign_pick_weight,
             params.assign_drop_weight,
             params.assign_idle_bias,
             params.congestion_weight,
-            params.load_balance_weight,
         ],
         dtype=np.float32,
     )
 
+
 def vector_to_params(vec: np.ndarray) -> PriorityParams:
+    # Convert a length-8 (or shorter) vector back into a PriorityParams object.
+    # For fields not present in the learned vector (idle_bias, load_balance_weight),
+    # preserve the current in-memory params so training does not unexpectedly change them.
     raw = np.asarray(vec, dtype=np.float32)
     raw = np.where(np.isfinite(raw), raw, 0.0)
-    safe_len = 10
+    safe_len = 8
     z = np.zeros(safe_len, dtype=np.float32)
     z[: min(raw.size, safe_len)] = raw[: min(raw.size, safe_len)]
+
     goal_w, pick_w, drop_w = np.clip(z[:3], 0.0, 10.0)
-    idle_bias = float(np.clip(z[3], -5000.0, 5000.0))
-    idle_penalty = float(np.clip(z[4], 0.0, 5000.0))
-    assign_pick = float(np.clip(z[5], 0.0, 10.0))
-    assign_drop = float(np.clip(z[6], 0.0, 10.0))
-    assign_idle_bias = float(np.clip(z[7], -5000.0, 5000.0))
-    congestion_w = float(np.clip(z[8], 0.0, 10.0))
-    load_balance_w = float(np.clip(z[9], -10.0, 10.0))
+    idle_penalty = float(np.clip(z[3], 0.0, 5000.0))
+    assign_pick = float(np.clip(z[4], 0.0, 10.0))
+    assign_drop = float(np.clip(z[5], 0.0, 10.0))
+    assign_idle_bias = float(np.clip(z[6], -5000.0, 5000.0))
+    congestion_w = float(np.clip(z[7], 0.0, 10.0))
+
+    # Preserve non-learned fields from current in-memory params (if any)
+    current = get_priority_params()
+    idle_bias = float(getattr(current, "idle_bias", 0.0))
+    load_balance_w = float(getattr(current, "load_balance_weight", 0.0))
+
     return PriorityParams(
         goal_weight=float(goal_w),
         pick_weight=float(pick_w),
@@ -163,9 +181,19 @@ def rollout_once(
         if isinstance(info, dict) and info.get("collision", False):
             if collision_penalty is not None:
                 total_reward = float(collision_penalty)
+            print("Episode ended due to collision.")
             break
         steps += 1
+        # print(f"未割り当てタスク数: {len(env.current_tasklist)}")
+        # for i in range(env.agent_num):
+        #     print(f" Agent {i} action: {actions[i]}")
+        #     print(f" Agent {i} start: {env.current_start[i]}, goal: {env.goal_array[i]}")
+        #     print(f" Agent {i} avail actions: {env.get_avail_agent_actions(i, env.n_actions)[1]}")
+        #     # タスクをアサインされている場合、そのタスクも表示
+        #     if i < len(env.assigned_tasks):
+        #         print(f" Agent {i} assigned task: {env.assigned_tasks[i]}")
     env.close()
+    print(f" Total reward: {total_reward}")
     return total_reward
 
 def rollout_mean(
@@ -209,7 +237,8 @@ def train_priority_params_gpu(
     eval_episodes: int = 5,
     seed: int = 0,
     domain_randomize: bool = False,
-    collision_penalty: Optional[float] = -1000.0,
+    collision_penalty: Optional[float] = None,
+    save_params_json: Optional[str] = None,
     log_csv: Optional[str] = "policy/train/train_log_gpu.csv",
     plot_png: Optional[str] = None,
     clip_step_norm: float = 0.0,
@@ -320,10 +349,10 @@ def train_priority_params_gpu(
         # Log and history
         _log_iter(it, r_mean, r_std, r_max, mean_vec.detach().cpu().numpy())
         hist_means.append(r_mean)
-        print(
-            f"[GPU-ES Iter {it:03d}] reward_mean={r_mean:.2f} reward_std={r_std:.2f} reward_max={r_max:.2f} "
-            f"eps={episodes_per_candidate} device={device.type}"
-        )
+        # print(
+        #     f"[GPU-ES Iter {it:03d}] reward_mean={r_mean:.2f} reward_std={r_std:.2f} reward_max={r_max:.2f} "
+        #     f"eps={episodes_per_candidate} device={device.type}"
+        # )
 
     # Save best params
     best_params = vector_to_params(best_vector.detach().cpu().numpy())
@@ -340,6 +369,16 @@ def train_priority_params_gpu(
         workers=workers,
         base_seed=seed * 999999 + 4242,
     )
+    # Optionally save best params and metadata to JSON
+    if save_params_json:
+        try:
+            # Save as flat dict matching the example format: keys -> numeric values
+            payload = asdict(best_params)
+            Path(save_params_json).parent.mkdir(parents=True, exist_ok=True)
+            with open(save_params_json, "w") as jf:
+                json.dump(payload, jf, indent=2)
+        except Exception:
+            pass
     return best_params, float(final_score), hist_means, device.type
 
 def main():
@@ -361,7 +400,12 @@ def main():
     parser.add_argument("--task-density", type=float, default=None)
     # Options
     parser.add_argument("--domain-randomize", action="store_true")
-    parser.add_argument("--collision-penalty", type=float, default=-1000.0)
+    parser.add_argument(
+        "--collision-penalty",
+        type=str,
+        default="none",
+        help="Collision penalty for an episode. Use a numeric value to overwrite episode reward on collision, or 'none' to keep per-step reward_list based rewards.",
+    )
     parser.add_argument("--log-csv", type=str, default="policy/train/train_log_gpu.csv")
     parser.add_argument("--plot-png", type=str, default=None)
     parser.add_argument("--clip-step-norm", type=float, default=0.0)
@@ -370,6 +414,7 @@ def main():
     parser.add_argument("--best-update-gap", type=float, default=0.0)
     parser.add_argument("--max-steps", type=int, default=500)
     parser.add_argument("--workers", type=int, default=0, help="Process workers for rollout parallelization (CPU).")
+    parser.add_argument("--save-params-json", type=str, default=None, help="Path to save best priority params and metadata as JSON.")
     args = parser.parse_args()
 
     # Apply ENV overrides
@@ -390,6 +435,16 @@ def main():
         ENV_CONFIG.update(overrides)
 
     t0 = time.time()
+    # interpret collision_penalty (allow 'none' to disable overwrite and use per-step rewards)
+    cp_arg = args.collision_penalty
+    try:
+        if isinstance(cp_arg, str) and cp_arg.lower() in ("none", "null", "nil", "off"):
+            collision_penalty_val = None
+        else:
+            collision_penalty_val = float(cp_arg)
+    except Exception:
+        collision_penalty_val = float(-1000.0)
+
     params, final_score, hist, device_type = train_priority_params_gpu(
         iterations=args.iterations,
         population=args.population,
@@ -399,7 +454,8 @@ def main():
         eval_episodes=args.eval_episodes,
         seed=args.seed,
         domain_randomize=args.domain_randomize,
-        collision_penalty=args.collision_penalty,
+        collision_penalty=collision_penalty_val,
+        save_params_json=args.save_params_json,
         log_csv=args.log_csv,
         plot_png=args.plot_png,
         clip_step_norm=args.clip_step_norm,

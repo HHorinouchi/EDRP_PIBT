@@ -14,9 +14,9 @@ TEAM_NAME = "your_team_name"
 
 
 def policy(obs, env):
-    actions = detect_actions(env)
+    actions, count = detect_actions(env)
     task_assign = assign_task(env)
-    return actions, task_assign
+    return actions, task_assign, count
 
 def assign_task(env):
     """Greedy task assignment based on travel distance to the next pick node."""
@@ -24,8 +24,8 @@ def assign_task(env):
     # We will select tasks by their index in env.current_tasklist (and env.assigned_list)
     task_assign = [-1] * env.agent_num
 
-    if not hasattr(env, 'current_tasklist') or len(env.current_tasklist) < env.agent_num:
-        print("Not enough tasks to assign")
+    if not hasattr(env, 'current_tasklist') or len(env.current_tasklist) == 0:
+        print("No tasks available for assignment")
         return task_assign
 
     # available_indices are indices in env.current_tasklist that are unassigned
@@ -38,8 +38,6 @@ def assign_task(env):
 
         best_task_idx = -1
         best_dist = float('inf')
-
-        print(f"Agent {i} evaluating tasks... {len(available_indices)} available")
 
         for idx in list(available_indices):
             # idx indexes into env.current_tasklist
@@ -65,7 +63,7 @@ def assign_task(env):
     
         if best_task_idx == -1:
             print(f"No suitable task found for agent {i}")
-            
+
         if best_task_idx != -1:
             task_assign[i] = best_task_idx
             # reserve this task locally so another agent won't pick it in this loop
@@ -108,6 +106,8 @@ def detect_actions(env):
     # 占有されるエッジを管理 List[ (from_node, to_node) ]
     occupied_edges = [(None, None)] * env.agent_num
     current_priority = 0 # 行動が決定したエージェント数
+    most_high_priority = 0  # 最も高い優先度のエージェントインデックス
+    max_wait = 4  # 最大停止ステップ数
     # 各エージェントが可能な行動をリスト化し、行動を変更するときに同じ行動を繰り返さないようにする
     avail_actions_list = []
     for i in range(env.agent_num):
@@ -134,6 +134,10 @@ def detect_actions(env):
             path_length_list.append((action, path_length))
 
         sorted_avail_actions = [action for action, _ in sorted(path_length_list, key=lambda x: x[1])]
+        for i in range(1, 4):
+            # -1, -2, ... を後ろに回す
+            # actionが-の場合、停止するステップ数が1,2,3,...と増えることを意味するため
+            sorted_avail_actions.append(-i)
         avail_actions_list.append(sorted_avail_actions)
         actions.append(None)
 
@@ -141,12 +145,6 @@ def detect_actions(env):
     row_avail_actions_list = copy.deepcopy(avail_actions_list)
     while current_priority < env.agent_num:
         count += 1
-        if count > 10000:
-            # 無限ループ防止
-            for i in range(env.agent_num):
-                if actions[i] is None:
-                    actions[i] = -1
-            break
         # 優先度順にエージェントの行動を決定
         # 衝突しない可能な行動が見つからなかった場合、current_priorityを減らして一つ上の優先度のエージェントの行動を再選択する
         agent_idx, _ = priority_order[current_priority]
@@ -155,9 +153,9 @@ def detect_actions(env):
         avail_actions = avail_actions_list[agent_idx]
         action_selected = False
         for action in list(avail_actions):
-            if len(row_avail_actions_list[agent_idx]) == 2: # これは、エッジ上にいるとき
+            if len(row_avail_actions_list[agent_idx]) == max_wait+1: # これは、エッジ上にいるとき
                 next_node = row_avail_actions_list[agent_idx][0]  # エッジ上にいるときは進行方向のノードにしか行けない
-            elif action == -1: # ノード上にいて、行き先がなく停止を選択するとき,next_nodeは現在ノード
+            elif action < 0: # ノード上にいて、行き先がなく停止を選択するとき,next_nodeは現在ノード
                 next_node = env.current_start[agent_idx]
             else:
                 next_node = action
@@ -167,7 +165,7 @@ def detect_actions(env):
             # occupied_nodesにnext_nodeが存在し、かつその占有ステップ数がneeded_stepと5tep以内の誤差しかない場合、衝突するので次の行動を評価
             # occupied_nodes: List[(node:int, step:float)]
             for occupied_node, occupied_step in occupied_nodes:
-                if occupied_node == next_node and (abs(occupied_step - needed_step) <= 3 or occupied_step == -1):
+                if occupied_node == next_node and (abs(occupied_step - (needed_step + max(0, -action))) <= 3 or occupied_step == -1):
                     # 衝突が発生した場合、次の行動を評価
                     conflict = True
                     avail_actions.remove(action)
@@ -183,7 +181,7 @@ def detect_actions(env):
                 action_selected = True
                 current_priority += 1
                 # ノードの占有状況を更新
-                occupied_nodes[agent_idx] = (next_node, needed_step)
+                occupied_nodes[agent_idx] = (next_node, needed_step + max(0, -action))  # 停止の場合、needed_stepに停止ステップ数を加える
                 # エッジの占有状況を更新
                 occupied_edges[agent_idx] = (env.current_start[agent_idx], next_node)
                 avail_actions.remove(action)
@@ -192,13 +190,16 @@ def detect_actions(env):
             # 衝突が避けられない場合可能な行動を補填し、一つ上の優先度のエージェントの行動を再選択
 
             # 最上位優先度エージェントの場合、停止を選択
-            if current_priority == 0:
+            if current_priority <= most_high_priority:
                 # 最優先エージェントで可能な行動がない場合、停止を選択
-                actions[agent_idx] = -1
+                actions[agent_idx] = -3
                 current_priority += 1
+                most_high_priority += 1
                 # ノードの占有状況を更新
-                occupied_nodes[agent_idx] = (env.current_start[agent_idx], -1)
-                # エッジの占有状況は更新しない（停止しているため）
+                occupied_nodes[agent_idx] = (env.current_start[agent_idx], needed_step + 3)
+                # エッジの占有状況を更新
+                if len(row_avail_actions_list[agent_idx]) == max_wait+1:
+                    occupied_edges[agent_idx] = (env.current_start[agent_idx], row_avail_actions_list[agent_idx][0])
             else:
                 # 現在のagent_idxの可能行動をリセット
                 avail_actions_list[agent_idx] = copy.deepcopy(row_avail_actions_list[agent_idx])
@@ -210,8 +211,8 @@ def detect_actions(env):
                 occupied_nodes[prev_agent_idx] = (None, None)
                 occupied_edges[prev_agent_idx] = (None, None)
                 continue
-            
-    return actions
+    
+    return actions, count
 
 # 現在ノードとタスクスタートノード、タスクゴールノードを用いた最短経路距離を計算（未ピックアップ）
 def calculate_task_path_length(env, agent_idx, assigned_task):

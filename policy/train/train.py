@@ -27,7 +27,7 @@ from policy.my_policy import (  # noqa: E402
 
 # DrpEnv の基本設定。train/eval で同じ環境を用いる。
 ENV_CONFIG = dict(
-    agent_num=3,
+    agent_num=4,
     speed=1.0,
     start_ori_array=[],
     goal_array=[],

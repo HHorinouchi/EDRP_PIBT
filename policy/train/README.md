@@ -148,6 +148,23 @@ python policy/train/train.py \
   --collision bounceback \
   --task-density 1.0
 ```
+GPUでの実行について
+
+- 設定: T=60, K=12, N=3（総エピソード ≒ 60 × 12 × 3 = 2160）
+```bash
+python policy/train/train.py \
+  --iterations 60 \
+  --population 12 \
+  --episodes-per-candidate 3 \
+  --eval-episodes 5 \
+  --seed 0 \
+  --map-name map_3x3 \
+  --agent-num 5 \
+  --speed 1.0 \
+  --time-limit 300 \
+  --collision bounceback \
+  --task-density 1.0
+```
 
 3) 高信頼（論文化・評価図向け）
 - 設定: T=80, K=16, N=5（総エピソード ≒ 80 × 16 × 5 = 6400）
@@ -175,9 +192,9 @@ python policy/train/train_by_gpu.py \
   --episodes-per-candidate 5 \
   --eval-episodes 5 \
   --seed 0 \
-  --map-name map_3x3 \
-  --agent-num 3 \
-  --speed 1.0 \
+  --map-name map_shibuya \
+  --agent-num 10 \
+  --speed 5.0 \
   --time-limit 300 \
   --collision bounceback \
   --task-density 1.0 \
