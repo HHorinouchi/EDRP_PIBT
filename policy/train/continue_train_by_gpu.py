@@ -15,6 +15,8 @@ import concurrent.futures as futures
 import json
 from dataclasses import asdict, dataclass
 
+
+
 # Local imports (repo root on path)
 ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
@@ -32,6 +34,103 @@ from policy.my_policy import (  # noqa: E402
     set_priority_params,
 )
 
+
+def _coerce_cuda_device(token: str) -> Optional[str]:
+    """Normalize various CUDA device strings to cuda:<idx>."""
+    if not torch.cuda.is_available():
+        return None
+    token = token.strip().lower()
+    if not token:
+        return None
+    if token == "cuda":
+        idx = 0
+    elif token.isdigit():
+        idx = int(token)
+    elif token.startswith("cuda:"):
+        try:
+            idx = int(token.split(":", 1)[1])
+        except (IndexError, ValueError):
+            return None
+    else:
+        return None
+    if 0 <= idx < torch.cuda.device_count():
+        return f"cuda:{idx}"
+    return None
+
+
+def _parse_device_list(device_arg: Optional[str]) -> List[str]:
+    if not device_arg:
+        return []
+    devices: List[str] = []
+    for raw in device_arg.split(","):
+        token = raw.strip()
+        if not token:
+            continue
+        lowered = token.lower()
+        if lowered in ("cpu", "mps"):
+            devices.append(lowered)
+            continue
+        coerced = _coerce_cuda_device(lowered)
+        if coerced is not None:
+            devices.append(coerced)
+        else:
+            devices.append(token)
+    return devices
+
+
+def _resolve_device(device_override: Optional[str]) -> torch.device:
+    if device_override:
+        lowered = device_override.strip().lower()
+        if lowered == "cpu":
+            return torch.device("cpu")
+        if lowered == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return torch.device("mps")
+        coerced = _coerce_cuda_device(lowered)
+        if coerced is not None:
+            device = torch.device(coerced)
+            idx = device.index if device.index is not None else 0
+            torch.cuda.set_device(idx)
+            return torch.device(f"cuda:{idx}")
+        try:
+            device = torch.device(device_override)
+            if device.type == "cuda" and torch.cuda.is_available():
+                idx = device.index if device.index is not None else 0
+                torch.cuda.set_device(idx)
+                return torch.device(f"cuda:{idx}")
+            if device.type == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                return device
+        except Exception:
+            pass
+    if torch.cuda.is_available():
+        try:
+            idx = torch.cuda.current_device()
+        except Exception:
+            idx = 0
+        idx = int(idx)
+        torch.cuda.set_device(idx)
+        return torch.device(f"cuda:{idx}")
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
+def _compute_time_limit(agent_num: Optional[int]) -> int:
+    try:
+        value = int(agent_num)
+    except (TypeError, ValueError):
+        value = 0
+    if value <= 0:
+        value = 1
+    # Time limit = agent_num × 5 × 50
+    return max(value * 5 * 50, 1)
+
+
+def _normalized_env_config(cfg: dict) -> dict:
+    normalized = dict(cfg)
+    agent_num = normalized.get("agent_num")
+    normalized["time_limit"] = _compute_time_limit(agent_num)
+    return normalized
+
 # Base environment configuration (single-map specialization by default)
 ENV_CONFIG = dict(
     agent_num=10,
@@ -40,7 +139,7 @@ ENV_CONFIG = dict(
     goal_array=[],
     visu_delay=0.0,
     state_repre_flag="onehot",
-    time_limit=100000,
+    time_limit=_compute_time_limit(10),
     collision="bounceback",
     task_flag=True,
     reward_list={"goal": 100, "collision": -100, "wait": -10, "move": -1},
@@ -50,7 +149,7 @@ ENV_CONFIG = dict(
 
 def make_env() -> DrpEnv:
     # EE_map.MapMake(enable_render=False) is default via constructor
-    return DrpEnv(**ENV_CONFIG)
+    return DrpEnv(**_normalized_env_config(ENV_CONFIG))
 
 # Domain randomization helpers
 MAP_POOL = list(UNREAL_MAP)
@@ -124,9 +223,9 @@ def sample_env_config(rng: np.random.Generator) -> dict:
     max_agents = max(2, min(5, max(2, n_nodes - 1)))
     agent_num = int(rng.integers(2, max_agents + 1))
     speed = float(rng.uniform(0.8, 2.0))
-    time_limit = int(rng.integers(150, 401))
     collision = "bounceback" if rng.random() < 0.7 else "terminated"
     task_density = float(rng.uniform(0.3, 1.5))
+    time_limit = _compute_time_limit(agent_num)
     return dict(
         agent_num=agent_num,
         speed=speed,
@@ -143,7 +242,7 @@ def sample_env_config(rng: np.random.Generator) -> dict:
     )
 
 def make_env_from_config(cfg: dict) -> DrpEnv:
-    return DrpEnv(**cfg)
+    return DrpEnv(**_normalized_env_config(cfg))
 
 # Parameter vectorization: use exactly the 8 parameters the trainer should learn.
 # Ordered vector (len=8):
@@ -238,7 +337,14 @@ def rollout_once(
         "timeup": False,
     }
     while not all(done_flags) and steps < step_limit:
-        actions, task_assign = rollout_policy(obs, env)
+        policy_output = rollout_policy(obs, env)
+        if isinstance(policy_output, tuple):
+            if len(policy_output) >= 3:
+                actions, task_assign, count = policy_output[0], policy_output[1], policy_output[2]
+            else:
+                raise ValueError("Policy returned tuple with fewer than three elements")
+        else:
+            raise TypeError("Policy output must be a tuple of (actions, task_assign, count, ...)")
         obs, step_rewards, done_flags, info = env.step({"pass": actions, "task": task_assign})
         steps += 1
         if isinstance(info, dict):
@@ -246,12 +352,12 @@ def rollout_once(
         if isinstance(info, dict) and info.get("collision", False):
             last_info = dict(last_info)
             last_info["collision"] = True
-            print("Episode ended due to collision.")
+            # print("Episode ended due to collision.")
             break
         if _tasks_cleared(env):
             last_info = dict(last_info)
             last_info["goal"] = True
-            print("Episode ended after completing all tasks.")
+            # print("Episode ended after completing all tasks.")
             break
         # for i in range(env.agent_num):
         #     print(f" Agent {i} action: {actions[i]}")
@@ -266,7 +372,7 @@ def rollout_once(
     r_move = float(getattr(env, "r_move", 0.0))
     r_coll = float(getattr(env, "r_coll", 0.0))
     speed = float(getattr(env, "speed", 1.0))
-    goal_reward = tasks_completed * r_goal
+    goal_reward = tasks_completed * r_goal / 10
     step_penalty = steps * r_move
     collision_term = (r_coll * speed) if last_info.get("collision", False) else 0.0
     final_reward = goal_reward + step_penalty + collision_term
@@ -339,6 +445,25 @@ def rollout_mean(
     }
     return mean_reward, metrics
 
+
+def _evaluate_candidate_worker(payload: dict) -> Tuple[float, Dict[str, float]]:
+    params_vec = np.asarray(payload["params_vec"], dtype=np.float32)
+    episodes = int(payload.get("episodes", 1))
+    max_steps = payload.get("max_steps")
+    domain_randomize = bool(payload.get("domain_randomize", False))
+    collision_penalty = payload.get("collision_penalty")
+    workers = int(payload.get("workers", 0) or 0)
+    base_seed = int(payload.get("base_seed", 0))
+    return rollout_mean(
+        params_vec,
+        episodes=episodes,
+        max_steps=max_steps,
+        domain_randomize=domain_randomize,
+        collision_penalty=collision_penalty,
+        workers=workers,
+        base_seed=base_seed,
+    )
+
 def train_priority_params_gpu(
     iterations: int = 40,
     population: int = 16,
@@ -357,15 +482,12 @@ def train_priority_params_gpu(
     best_update_alpha: float = 0.1,
     best_update_gap: float = 0.0,
     max_steps: Optional[int] = None,
-    workers: int = 0,  # number of CPU processes for parallel rollouts
+    workers: int = 0,  # number of CPU processes for per-candidate episode rollouts
+    candidate_workers: int = 0,  # process pool for evaluating distinct ES candidates
+    device_override: Optional[str] = None,
 ) -> Tuple[PriorityParams, float, List[float], str, Dict[str, float]]:
     # Select device
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        device = torch.device("mps")
-    else:
-        device = torch.device("cpu")
+    device = _resolve_device(device_override)
 
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -391,14 +513,25 @@ def train_priority_params_gpu(
     hist_means: List[float] = []
     best_reward_ema = float(best_reward)
 
-    print(
-        "[Init] reward_mean={:.2f}, goal_rate={:.3f}, collision_rate={:.3f}, avg_steps={:.1f}".format(
-            base_mean,
-            base_metrics.get("goal_rate", float("nan")),
-            base_metrics.get("collision_rate", float("nan")),
-            base_metrics.get("avg_steps", float("nan")),
-        )
-    )
+    assigned_candidate_workers = int(candidate_workers or 0)
+    if assigned_candidate_workers < 0:
+        assigned_candidate_workers = max(os.cpu_count() or 1, 1)
+    candidate_pool: Optional[futures.ProcessPoolExecutor] = None
+    if assigned_candidate_workers > 0:
+        candidate_pool = futures.ProcessPoolExecutor(max_workers=assigned_candidate_workers)
+        if workers and workers > 0:
+            print(
+                "[WARN] Both candidate_workers and workers are >0; this may oversubscribe CPU cores."
+            )
+
+    # print(
+    #     "[Init] reward_mean={:.2f}, goal_rate={:.3f}, collision_rate={:.3f}, avg_steps={:.1f}".format(
+    #         base_mean,
+    #         base_metrics.get("goal_rate", float("nan")),
+    #         base_metrics.get("collision_rate", float("nan")),
+    #         base_metrics.get("avg_steps", float("nan")),
+    #     )
+    # )
 
     # CSV header
     metric_keys = [
@@ -438,69 +571,84 @@ def train_priority_params_gpu(
         except Exception:
             pass
 
-    for it in range(1, iterations + 1):
-        # Noise: (population, dim) on device
-        noise = torch.randn((population, dim), device=device, dtype=mean_vec.dtype)
-        candidates = mean_vec.unsqueeze(0) + sigma * noise
+    try:
+        for it in range(1, iterations + 1):
+            # Noise: (population, dim) on device
+            noise = torch.randn((population, dim), device=device, dtype=mean_vec.dtype)
+            candidates = mean_vec.unsqueeze(0) + sigma * noise
 
-        # Evaluate rewards for each candidate (CPU env). We must move vectors to CPU numpy
-        rewards = []
-        candidate_metrics = []
-        for idx in range(population):
-            vec_np = candidates[idx].detach().cpu().numpy()
-            r, metrics = rollout_mean(
-                vec_np,
-                episodes=episodes_per_candidate,
-                max_steps=max_steps,
-                domain_randomize=domain_randomize,
-                collision_penalty=collision_penalty,
-                workers=workers,
-                base_seed=seed * 100000 + it * 1000 + idx,
+            # Evaluate rewards for each candidate (CPU env). We must move vectors to CPU numpy
+            candidate_payloads = []
+            for idx in range(population):
+                vec_np = candidates[idx].detach().cpu().numpy()
+                candidate_payloads.append(
+                    {
+                        "params_vec": vec_np,
+                        "episodes": episodes_per_candidate,
+                        "max_steps": max_steps,
+                        "domain_randomize": domain_randomize,
+                        "collision_penalty": collision_penalty,
+                        "workers": workers,
+                        "base_seed": seed * 100000 + it * 1000 + idx,
+                    }
+                )
+
+            candidate_results: List[Tuple[float, Dict[str, float]]] = []
+            if candidate_pool is not None:
+                futures_list = [candidate_pool.submit(_evaluate_candidate_worker, payload) for payload in candidate_payloads]
+                for fut in futures_list:
+                    candidate_results.append(fut.result())
+            else:
+                for payload in candidate_payloads:
+                    candidate_results.append(_evaluate_candidate_worker(payload))
+
+            rewards = [res[0] for res in candidate_results]
+            candidate_metrics = [res[1] for res in candidate_results]
+            rewards_np = np.asarray(rewards, dtype=np.float32)
+
+            # ES update on GPU
+            r_mean = float(rewards_np.mean())
+            r_std = float(rewards_np.std())
+            r_max = float(rewards_np.max())
+            rewards_t = torch.tensor(rewards_np, device=device, dtype=mean_vec.dtype)
+            normalized = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
+            step = (lr / (population * sigma)) * (noise.transpose(0, 1) @ normalized)  # (dim,)
+            if clip_step_norm and clip_step_norm > 0.0:
+                step_norm = float(torch.linalg.vector_norm(step).item())
+                if step_norm > clip_step_norm:
+                    step = step * (clip_step_norm / (step_norm + 1e-8))
+            new_mean_vec = mean_vec + step
+            mean_vec = new_mean_vec
+
+            # Best tracking (configurable)
+            best_idx = int(np.argmax(rewards_np))
+            current_best = float(rewards_np[best_idx])
+            best_reward_ema = (best_update_alpha * r_mean) + ((1.0 - best_update_alpha) * best_reward_ema)
+            if best_update_mode == "mean_gap":
+                threshold = r_mean + best_update_gap
+            elif best_update_mode == "moving_avg":
+                threshold = best_reward_ema + best_update_gap
+            else:
+                threshold = best_reward
+            if current_best > threshold:
+                best_reward = current_best
+                best_vector = candidates[best_idx].detach().clone()
+
+            # Log and history
+            best_metrics = candidate_metrics[best_idx] if candidate_metrics else {}
+
+            _log_iter(
+                it,
+                r_mean,
+                r_std,
+                r_max,
+                mean_vec.detach().cpu().numpy(),
+                metrics=best_metrics,
             )
-            rewards.append(r)
-            candidate_metrics.append(metrics)
-        rewards_np = np.asarray(rewards, dtype=np.float32)
-
-        # ES update on GPU
-        r_mean = float(rewards_np.mean())
-        r_std = float(rewards_np.std())
-        r_max = float(rewards_np.max())
-        rewards_t = torch.tensor(rewards_np, device=device, dtype=mean_vec.dtype)
-        normalized = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
-        step = (lr / (population * sigma)) * (noise.transpose(0, 1) @ normalized)  # (dim,)
-        if clip_step_norm and clip_step_norm > 0.0:
-            step_norm = float(torch.linalg.vector_norm(step).item())
-            if step_norm > clip_step_norm:
-                step = step * (clip_step_norm / (step_norm + 1e-8))
-        new_mean_vec = mean_vec + step
-        mean_vec = new_mean_vec
-
-        # Best tracking (configurable)
-        best_idx = int(np.argmax(rewards_np))
-        current_best = float(rewards_np[best_idx])
-        best_reward_ema = (best_update_alpha * r_mean) + ((1.0 - best_update_alpha) * best_reward_ema)
-        if best_update_mode == "mean_gap":
-            threshold = r_mean + best_update_gap
-        elif best_update_mode == "moving_avg":
-            threshold = best_reward_ema + best_update_gap
-        else:
-            threshold = best_reward
-        if current_best > threshold:
-            best_reward = current_best
-            best_vector = candidates[best_idx].detach().clone()
-
-        # Log and history
-        best_metrics = candidate_metrics[best_idx] if candidate_metrics else {}
-
-        _log_iter(
-            it,
-            r_mean,
-            r_std,
-            r_max,
-            mean_vec.detach().cpu().numpy(),
-            metrics=best_metrics,
-        )
-        hist_means.append(r_mean)
+            hist_means.append(r_mean)
+    finally:
+        if candidate_pool is not None:
+            candidate_pool.shutdown(wait=True)
         # print(
         #     f"[GPU-ES Iter {it:03d}] reward_mean={r_mean:.2f} reward_std={r_std:.2f} reward_max={r_max:.2f} "
         #     f"eps={episodes_per_candidate} device={device.type}"
@@ -566,6 +714,24 @@ def main():
     parser.add_argument("--best-update-gap", type=float, default=0.0)
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--workers", type=int, default=0, help="Process workers for rollout parallelization (CPU).")
+    parser.add_argument(
+        "--candidate-workers",
+        type=int,
+        default=0,
+        help="Process pool size for concurrent ES candidate evaluations (CPU). Use a negative value to auto-set to CPU count.",
+    )
+    parser.add_argument(
+        "--sweep-workers",
+        type=int,
+        default=0,
+        help="Number of concurrent sweep jobs. Defaults to the number of --gpu-devices if provided, otherwise 1.",
+    )
+    parser.add_argument(
+        "--gpu-devices",
+        type=str,
+        default=None,
+        help="Comma-separated device list (e.g. '0,1', 'cuda:1,cpu') to cycle across training jobs.",
+    )
     parser.add_argument("--save-params-json", type=str, default=None, help="Path to save best priority params and metadata as JSON.")
     parser.add_argument("--sweep", action="store_true", help="Run sequential training across the predefined map list and agent counts.")
     parser.add_argument(
@@ -575,6 +741,11 @@ def main():
         help="Directory to store JSON parameter files and logs when --sweep is enabled.",
     )
     args = parser.parse_args()
+
+    device_list = _parse_device_list(args.gpu_devices)
+    candidate_workers = args.candidate_workers
+    if candidate_workers < 0:
+        candidate_workers = max(os.cpu_count() or 1, 1)
 
     # Apply ENV overrides
     overrides = {}
@@ -596,6 +767,7 @@ def main():
             print("[SWEEP] Ignoring --map-name/--agent-num because --sweep controls these values.")
     if overrides:
         ENV_CONFIG.update(overrides)
+        ENV_CONFIG["time_limit"] = _compute_time_limit(ENV_CONFIG.get("agent_num"))
 
     # interpret collision_penalty (allow 'none' to disable overwrite and use per-step rewards)
     cp_arg = args.collision_penalty
@@ -608,10 +780,11 @@ def main():
         collision_penalty_val = float(-1000.0)
 
     if args.sweep:
-        run_sweep(args, collision_penalty_val)
+        run_sweep(args, collision_penalty_val, candidate_workers, device_list)
         return
 
     t0 = time.time()
+    device_override = device_list[0] if device_list else None
     params, final_score, hist, device_type, final_stats = train_priority_params_gpu(
         iterations=args.iterations,
         population=args.population,
@@ -631,6 +804,8 @@ def main():
         best_update_gap=args.best_update_gap,
         max_steps=args.max_steps,
         workers=args.workers,
+        candidate_workers=candidate_workers,
+        device_override=device_override,
     )
 
     print("==== Final evaluation (GPU ES) ====")
@@ -666,68 +841,106 @@ def main():
     elapsed = time.time() - t0
     print("==== Execution time ====")
     print(f"Device: {device_type}, Elapsed: {elapsed:.2f} seconds")
-def run_sweep(args, collision_penalty_val: Optional[float]) -> None:
-    """Run sequential training across the requested map/agent combinations."""
+def run_sweep(
+    args,
+    collision_penalty_val: Optional[float],
+    candidate_workers: int,
+    device_list: List[str],
+) -> None:
+    """Run training across the requested map/agent combinations (optionally in parallel)."""
     output_dir = Path(args.sweep_output_dir or "policy/train/sweep_results")
     logs_dir = output_dir / "logs"
     output_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    summary = []
-    original_env_config = dict(ENV_CONFIG)
-    run_idx = 0
+    base_env_config = dict(ENV_CONFIG)
+    tasks: List[dict] = []
 
-    try:
-        for map_name in SWEEP_MAP_LIST:
-            min_agents, max_agents = _agent_range_for_map(map_name)
-            if max_agents <= 0:
-                print(f"[SWEEP] Skipping {map_name}: node information unavailable or insufficient.")
-                continue
+    for map_name in SWEEP_MAP_LIST:
+        min_agents, max_agents = _agent_range_for_map(map_name)
+        if max_agents <= 0:
+            continue
+        for agent_num in range(min_agents, max_agents + 1):
+            order = len(tasks)
+            run_seed = args.seed + order
+            run_config = dict(base_env_config)
+            run_config.update({
+                "map_name": map_name,
+                "agent_num": agent_num,
+            })
+            run_config["time_limit"] = _compute_time_limit(run_config.get("agent_num"))
 
-            for agent_num in range(min_agents, max_agents + 1):
-                run_idx += 1
-                run_seed = args.seed + run_idx - 1
-                run_config = dict(original_env_config)
-                run_config.update({
-                    "map_name": map_name,
-                    "agent_num": agent_num,
-                })
+            json_path = output_dir / f"priority_params_{map_name}_agents_{agent_num}.json"
+            log_csv_path = logs_dir / f"train_log_{map_name}_agents_{agent_num}.csv"
 
+            trainer_kwargs = dict(
+                iterations=args.iterations,
+                population=args.population,
+                sigma=args.sigma,
+                lr=args.lr,
+                episodes_per_candidate=args.episodes_per_candidate,
+                eval_episodes=args.eval_episodes,
+                seed=run_seed,
+                domain_randomize=args.domain_randomize,
+                collision_penalty=collision_penalty_val,
+                save_params_json=str(json_path),
+                log_csv=str(log_csv_path),
+                plot_png=None,
+                clip_step_norm=args.clip_step_norm,
+                best_update_mode=args.best_update_mode,
+                best_update_alpha=args.best_update_alpha,
+                best_update_gap=args.best_update_gap,
+                max_steps=args.max_steps,
+                workers=args.workers,
+                candidate_workers=candidate_workers,
+            )
+
+            summary_entry = {
+                "map_name": map_name,
+                "agent_num": agent_num,
+                "params_path": str(json_path),
+                "log_csv": str(log_csv_path),
+                "iterations": args.iterations,
+                "population": args.population,
+                "sigma": args.sigma,
+                "lr": args.lr,
+                "episodes_per_candidate": args.episodes_per_candidate,
+                "eval_episodes": args.eval_episodes,
+                "seed": run_seed,
+                "_order": order,
+            }
+
+            tasks.append(
+                {
+                    "run_config": run_config,
+                    "trainer_kwargs": trainer_kwargs,
+                    "summary_entry": summary_entry,
+                }
+            )
+
+    if not tasks:
+        print("[SWEEP] No valid map/agent combinations found.")
+        return
+
+    device_cycle = device_list or [None]
+    requested_workers = args.sweep_workers if args.sweep_workers and args.sweep_workers > 0 else None
+    sweep_workers = requested_workers or len(device_cycle)
+    sweep_workers = max(1, min(sweep_workers, len(tasks)))
+
+    summary: List[dict] = []
+
+    if sweep_workers <= 1:
+        try:
+            for idx, task in enumerate(tasks):
                 ENV_CONFIG.clear()
-                ENV_CONFIG.update(run_config)
-
-                json_path = output_dir / f"priority_params_{map_name}_agents_{agent_num}.json"
-                log_csv_path = logs_dir / f"train_log_{map_name}_agents_{agent_num}.csv"
-
-                print(f"[SWEEP] Training map={map_name}, agents={agent_num}, seed={run_seed}")
-
-                params, final_score, hist, device_type, final_stats = train_priority_params_gpu(
-                    iterations=args.iterations,
-                    population=args.population,
-                    sigma=args.sigma,
-                    lr=args.lr,
-                    episodes_per_candidate=args.episodes_per_candidate,
-                    eval_episodes=args.eval_episodes,
-                    seed=run_seed,
-                    domain_randomize=args.domain_randomize,
-                    collision_penalty=collision_penalty_val,
-                    save_params_json=str(json_path),
-                    log_csv=str(log_csv_path),
-                    plot_png=None,
-                    clip_step_norm=args.clip_step_norm,
-                    best_update_mode=args.best_update_mode,
-                    best_update_alpha=args.best_update_alpha,
-                    best_update_gap=args.best_update_gap,
-                    max_steps=args.max_steps,
-                    workers=args.workers,
-                )
-
-                summary.append(
+                ENV_CONFIG.update(task["run_config"])
+                trainer_kwargs = dict(task["trainer_kwargs"])
+                device_override = device_cycle[idx % len(device_cycle)]
+                trainer_kwargs["device_override"] = device_override
+                _, final_score, _, device_type, final_stats = train_priority_params_gpu(**trainer_kwargs)
+                entry = dict(task["summary_entry"])
+                entry.update(
                     {
-                        "map_name": map_name,
-                        "agent_num": agent_num,
-                        "params_path": str(json_path),
-                        "log_csv": str(log_csv_path),
                         "final_score": final_score,
                         "device": device_type,
                         "goal_rate": final_stats.get("goal_rate") if final_stats else None,
@@ -735,24 +948,69 @@ def run_sweep(args, collision_penalty_val: Optional[float]) -> None:
                         "timeup_rate": final_stats.get("timeup_rate") if final_stats else None,
                         "avg_steps": final_stats.get("avg_steps") if final_stats else None,
                         "avg_task_completion": final_stats.get("avg_task_completion") if final_stats else None,
-                        "iterations": args.iterations,
-                        "population": args.population,
-                        "sigma": args.sigma,
-                        "lr": args.lr,
-                        "episodes_per_candidate": args.episodes_per_candidate,
-                        "eval_episodes": args.eval_episodes,
-                        "seed": run_seed,
                     }
                 )
+                summary.append(entry)
+        finally:
+            ENV_CONFIG.clear()
+            ENV_CONFIG.update(base_env_config)
+    else:
+        payloads = []
+        for idx, task in enumerate(tasks):
+            payload = {
+                "run_config": task["run_config"],
+                "trainer_kwargs": dict(task["trainer_kwargs"]),
+                "summary_entry": dict(task["summary_entry"]),
+                "base_env_config": base_env_config,
+                "device_override": device_cycle[idx % len(device_cycle)],
+            }
+            payloads.append(payload)
 
-    finally:
-        ENV_CONFIG.clear()
-        ENV_CONFIG.update(original_env_config)
+        with futures.ProcessPoolExecutor(max_workers=sweep_workers) as pool:
+            future_to_payload = [pool.submit(_run_sweep_job, payload) for payload in payloads]
+            for fut in futures.as_completed(future_to_payload):
+                summary.append(fut.result())
+
+    summary.sort(key=lambda x: x.get("_order", 0))
+    for entry in summary:
+        entry.pop("_order", None)
 
     summary_path = output_dir / "sweep_summary.json"
+    ENV_CONFIG.clear()
+    ENV_CONFIG.update(base_env_config)
     with summary_path.open("w") as f:
         json.dump(summary, f, indent=2)
-    print(f"[SWEEP] Completed {run_idx} runs. Summary saved to {summary_path}.")
+    print(f"[SWEEP] Completed {len(tasks)} runs. Summary saved to {summary_path}.")
+
+
+def _run_sweep_job(payload: dict) -> dict:
+    run_config = payload["run_config"]
+    trainer_kwargs = dict(payload["trainer_kwargs"])
+    summary_entry = dict(payload["summary_entry"])
+    base_env_config = dict(payload.get("base_env_config", ENV_CONFIG))
+    device_override = payload.get("device_override")
+
+    try:
+        ENV_CONFIG.clear()
+        ENV_CONFIG.update(run_config)
+        trainer_kwargs["device_override"] = device_override
+        _, final_score, _, device_type, final_stats = train_priority_params_gpu(**trainer_kwargs)
+    finally:
+        ENV_CONFIG.clear()
+        ENV_CONFIG.update(base_env_config)
+
+    summary_entry.update(
+        {
+            "final_score": final_score,
+            "device": device_type,
+            "goal_rate": final_stats.get("goal_rate") if final_stats else None,
+            "collision_rate": final_stats.get("collision_rate") if final_stats else None,
+            "timeup_rate": final_stats.get("timeup_rate") if final_stats else None,
+            "avg_steps": final_stats.get("avg_steps") if final_stats else None,
+            "avg_task_completion": final_stats.get("avg_task_completion") if final_stats else None,
+        }
+    )
+    return summary_entry
 
 
 if __name__ == "__main__":
