@@ -707,7 +707,12 @@ def main():
         help="Collision penalty for an episode. Use a numeric value to overwrite episode reward on collision, or 'none' to keep per-step reward_list based rewards.",
     )
     parser.add_argument("--log-csv", type=str, default="policy/train/train_log_gpu.csv")
-    parser.add_argument("--plot-png", type=str, default=None)
+    parser.add_argument(
+        "--plot-png",
+        type=str,
+        default=None,
+        help="Path to save the learning curve PNG (defaults to '<log-csv stem>_learning_curve.png').",
+    )
     parser.add_argument("--clip-step-norm", type=float, default=0.0)
     parser.add_argument("--best-update-mode", type=str, choices=["max", "mean_gap", "moving_avg"], default="max")
     parser.add_argument("--best-update-alpha", type=float, default=0.1)
@@ -872,6 +877,7 @@ def run_sweep(
 
             json_path = output_dir / f"priority_params_{map_name}_agents_{agent_num}.json"
             log_csv_path = logs_dir / f"train_log_{map_name}_agents_{agent_num}.csv"
+            plot_png_path = _derive_plot_path(str(log_csv_path), None)
 
             trainer_kwargs = dict(
                 iterations=args.iterations,
@@ -885,7 +891,7 @@ def run_sweep(
                 collision_penalty=collision_penalty_val,
                 save_params_json=str(json_path),
                 log_csv=str(log_csv_path),
-                plot_png=None,
+                plot_png=str(plot_png_path) if plot_png_path else None,
                 clip_step_norm=args.clip_step_norm,
                 best_update_mode=args.best_update_mode,
                 best_update_alpha=args.best_update_alpha,
@@ -1011,6 +1017,17 @@ def _run_sweep_job(payload: dict) -> dict:
         }
     )
     return summary_entry
+
+
+def _derive_plot_path(log_csv: Optional[str], plot_png: Optional[str]) -> Optional[Path]:
+    """Return a target path for the learning curve image."""
+    if plot_png:
+        return Path(plot_png)
+    if not log_csv:
+        return None
+    log_path = Path(log_csv)
+    stem = log_path.stem or "training"
+    return log_path.parent / f"{stem}_learning_curve.png"
 
 
 if __name__ == "__main__":
