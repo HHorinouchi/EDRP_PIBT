@@ -465,7 +465,11 @@ def rollout_mean(
     return mean_reward, metrics
 
 
-def _save_learning_curve(history: List[float], plot_path: Optional[str]) -> None:
+def _save_learning_curve(
+    history: List[float],
+    collision_history: Optional[List[float]],
+    plot_path: Optional[str],
+) -> None:
     if not plot_path or not history:
         return
     try:
@@ -478,19 +482,42 @@ def _save_learning_curve(history: List[float], plot_path: Optional[str]) -> None
 
     try:
         Path(plot_path).parent.mkdir(parents=True, exist_ok=True)
-        plt.figure()
-        plt.plot(range(1, len(history) + 1), history, label="reward_mean")
-        plt.xlabel("iteration")
-        plt.ylabel("mean reward")
-        plt.grid(True)
-        plt.legend()
-        plt.savefig(plot_path, bbox_inches="tight")
+        iterations_axis = list(range(1, len(history) + 1))
+        fig, ax1 = plt.subplots()
+        line_reward, = ax1.plot(iterations_axis, history, label="reward_mean", color="tab:blue")
+        ax1.set_xlabel("iteration")
+        ax1.set_ylabel("mean reward", color="tab:blue")
+        ax1.tick_params(axis="y", labelcolor="tab:blue")
+        legend_lines = [line_reward]
+        legend_labels = [line_reward.get_label()]
+
+        if collision_history:
+            collision_array = np.array(collision_history, dtype=np.float32)
+            if np.any(np.isfinite(collision_array)):
+                ax2 = ax1.twinx()
+                line_collision, = ax2.plot(
+                    iterations_axis,
+                    collision_array,
+                    label="collision_rate",
+                    color="tab:red",
+                )
+                ax2.set_ylabel("collision rate", color="tab:red")
+                ax2.tick_params(axis="y", labelcolor="tab:red")
+                legend_lines.append(line_collision)
+                legend_labels.append(line_collision.get_label())
+
+        ax1.grid(True, axis="x")
+        if legend_lines:
+            ax1.legend(legend_lines, legend_labels, loc="upper right")
+        fig.tight_layout()
+        fig.savefig(plot_path, bbox_inches="tight")
+        plt.close(fig)
         print(f"Saved plot to: {plot_path}")
     except Exception as exc:
         print(f"Plotting failed for {plot_path}: {exc}")
     finally:
         try:
-            plt.close()
+            plt.close("all")
         except Exception:
             pass
 
@@ -534,7 +561,7 @@ def train_priority_params_gpu(
     workers: int = 0,  # number of CPU processes for per-candidate episode rollouts
     candidate_workers: int = 0,  # process pool for evaluating distinct ES candidates
     device_override: Optional[str] = None,
-) -> Tuple[PriorityParams, float, List[float], str, Dict[str, float]]:
+) -> Tuple[PriorityParams, float, List[float], List[float], str, Dict[str, float]]:
     # Select device
     device = _resolve_device(device_override)
 
@@ -560,6 +587,7 @@ def train_priority_params_gpu(
     best_reward = float(base_mean)
     best_vector = mean_vec.detach().clone()
     hist_means: List[float] = []
+    hist_collision_rates: List[float] = []
     best_reward_ema = float(best_reward)
 
     assigned_candidate_workers = int(candidate_workers or 0)
@@ -695,6 +723,7 @@ def train_priority_params_gpu(
                 metrics=best_metrics,
             )
             hist_means.append(r_mean)
+            hist_collision_rates.append(float(best_metrics.get("collision_rate", float("nan"))))
     finally:
         if candidate_pool is not None:
             candidate_pool.shutdown(wait=True)
@@ -729,8 +758,8 @@ def train_priority_params_gpu(
         except Exception:
             pass
 
-    _save_learning_curve(hist_means, plot_png)
-    return best_params, float(final_score), hist_means, device.type, final_stats
+    _save_learning_curve(hist_means, hist_collision_rates, plot_png)
+    return best_params, float(final_score), hist_means, hist_collision_rates, device.type, final_stats
 
 def main():
     parser = argparse.ArgumentParser(description="GPU ES training for my_policy priority parameters (PyTorch).")
@@ -849,7 +878,7 @@ def main():
     t0 = time.time()
     device_override = device_list[0] if device_list else None
     plot_path = _derive_plot_path(args.log_csv, args.plot_png)
-    params, final_score, hist, device_type, final_stats = train_priority_params_gpu(
+    params, final_score, hist, hist_collision, device_type, final_stats = train_priority_params_gpu(
         iterations=args.iterations,
         population=args.population,
         sigma=args.sigma,
@@ -993,7 +1022,7 @@ def run_sweep(
                 trainer_kwargs = dict(task["trainer_kwargs"])
                 device_override = device_cycle[idx % len(device_cycle)]
                 trainer_kwargs["device_override"] = device_override
-                _, final_score, _, device_type, final_stats = train_priority_params_gpu(**trainer_kwargs)
+                _, final_score, _, _, device_type, final_stats = train_priority_params_gpu(**trainer_kwargs)
                 entry = dict(task["summary_entry"])
                 entry.update(
                     {
@@ -1050,7 +1079,7 @@ def _run_sweep_job(payload: dict) -> dict:
         ENV_CONFIG.clear()
         ENV_CONFIG.update(run_config)
         trainer_kwargs["device_override"] = device_override
-        _, final_score, _, device_type, final_stats = train_priority_params_gpu(**trainer_kwargs)
+        _, final_score, _, _, device_type, final_stats = train_priority_params_gpu(**trainer_kwargs)
     finally:
         ENV_CONFIG.clear()
         ENV_CONFIG.update(base_env_config)
