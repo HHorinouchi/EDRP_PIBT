@@ -180,16 +180,35 @@ def _get_map_node_count(map_name: str) -> int:
         return 0
 
 
-def _agent_range_for_map(map_name: str) -> Tuple[int, int]:
-    """Return the inclusive agent-count range [min_agents, max_agents] for a map."""
+# def _agent_range_for_map(map_name: str) -> Tuple[int, int]:
+#     """Return the inclusive agent-count range [min_agents, max_agents] for a map."""
+#     n_nodes = _get_map_node_count(map_name)
+#     if n_nodes <= 0:
+#         return (0, 0)
+#     # Cap at 3/4 of nodes, but never exceed available nodes.
+#     max_agents = min(int(math.floor(n_nodes * 0.75)), n_nodes)
+#     if max_agents < 3:
+#         return (0, 0)
+#     return (3, max_agents)
+
+
+def _agent_counts_for_map(map_name: str) -> List[int]:
+    """Return specific agent counts (25%, 50%, 75% of nodes) for sweep runs."""
     n_nodes = _get_map_node_count(map_name)
     if n_nodes <= 0:
-        return (0, 0)
-    # Cap at 3/4 of nodes, but never exceed available nodes.
-    max_agents = min(int(math.floor(n_nodes * 0.75)), n_nodes)
-    if max_agents < 3:
-        return (0, 0)
-    return (3, max_agents)
+        return []
+    ratios = (0.25, 0.5, 0.75)
+    counts = set()
+    for ratio in ratios:
+        value = int(math.floor(n_nodes * ratio))
+        if value <= 0:
+            continue
+        value = min(value, n_nodes)
+        if value < 3:
+            value = 3
+        counts.add(value)
+    filtered = sorted(val for val in counts if 3 <= val <= n_nodes)
+    return filtered
 
 
 @dataclass
@@ -446,6 +465,36 @@ def rollout_mean(
     return mean_reward, metrics
 
 
+def _save_learning_curve(history: List[float], plot_path: Optional[str]) -> None:
+    if not plot_path or not history:
+        return
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception as exc:
+        print(f"Plotting failed for {plot_path}: {exc}")
+        return
+
+    try:
+        Path(plot_path).parent.mkdir(parents=True, exist_ok=True)
+        plt.figure()
+        plt.plot(range(1, len(history) + 1), history, label="reward_mean")
+        plt.xlabel("iteration")
+        plt.ylabel("mean reward")
+        plt.grid(True)
+        plt.legend()
+        plt.savefig(plot_path, bbox_inches="tight")
+        print(f"Saved plot to: {plot_path}")
+    except Exception as exc:
+        print(f"Plotting failed for {plot_path}: {exc}")
+    finally:
+        try:
+            plt.close()
+        except Exception:
+            pass
+
+
 def _evaluate_candidate_worker(payload: dict) -> Tuple[float, Dict[str, float]]:
     params_vec = np.asarray(payload["params_vec"], dtype=np.float32)
     episodes = int(payload.get("episodes", 1))
@@ -679,6 +728,8 @@ def train_priority_params_gpu(
                 json.dump(payload, jf, indent=2)
         except Exception:
             pass
+
+    _save_learning_curve(hist_means, plot_png)
     return best_params, float(final_score), hist_means, device.type, final_stats
 
 def main():
@@ -732,6 +783,12 @@ def main():
         help="Number of concurrent sweep jobs. Defaults to the number of --gpu-devices if provided, otherwise 1.",
     )
     parser.add_argument(
+        "--sweep-plot-dir",
+        type=str,
+        default=None,
+        help="If set, save per-run reward plots under this directory during --sweep.",
+    )
+    parser.add_argument(
         "--gpu-devices",
         type=str,
         default=None,
@@ -751,6 +808,7 @@ def main():
     candidate_workers = args.candidate_workers
     if candidate_workers < 0:
         candidate_workers = max(os.cpu_count() or 1, 1)
+    sweep_plot_dir = Path(args.sweep_plot_dir).resolve() if args.sweep_plot_dir else None
 
     # Apply ENV overrides
     overrides = {}
@@ -785,11 +843,12 @@ def main():
         collision_penalty_val = float(-1000.0)
 
     if args.sweep:
-        run_sweep(args, collision_penalty_val, candidate_workers, device_list)
+        run_sweep(args, collision_penalty_val, candidate_workers, device_list, sweep_plot_dir)
         return
 
     t0 = time.time()
     device_override = device_list[0] if device_list else None
+    plot_path = _derive_plot_path(args.log_csv, args.plot_png)
     params, final_score, hist, device_type, final_stats = train_priority_params_gpu(
         iterations=args.iterations,
         population=args.population,
@@ -802,7 +861,7 @@ def main():
         collision_penalty=collision_penalty_val,
         save_params_json=args.save_params_json,
         log_csv=args.log_csv,
-        plot_png=args.plot_png,
+        plot_png=str(plot_path) if plot_path else None,
         clip_step_norm=args.clip_step_norm,
         best_update_mode=args.best_update_mode,
         best_update_alpha=args.best_update_alpha,
@@ -826,23 +885,6 @@ def main():
                 tasks=final_stats.get("avg_task_completion", float("nan")),
             )
         )
-    if args.plot_png:
-        try:
-            import matplotlib
-            matplotlib.use("Agg")
-            import matplotlib.pyplot as plt
-            plt.figure()
-            plt.plot(hist, label="reward_mean")
-            plt.xlabel("iteration")
-            plt.ylabel("mean reward")
-            plt.grid(True)
-            plt.legend()
-            Path(args.plot_png).parent.mkdir(parents=True, exist_ok=True)
-            plt.savefig(args.plot_png, bbox_inches="tight")
-            plt.close()
-            print(f"Saved plot to: {args.plot_png}")
-        except Exception as e:
-            print(f"Plotting failed: {e}")
     elapsed = time.time() - t0
     print("==== Execution time ====")
     print(f"Device: {device_type}, Elapsed: {elapsed:.2f} seconds")
@@ -851,6 +893,7 @@ def run_sweep(
     collision_penalty_val: Optional[float],
     candidate_workers: int,
     device_list: List[str],
+    sweep_plot_dir: Optional[Path],
 ) -> None:
     """Run training across the requested map/agent combinations (optionally in parallel)."""
     output_dir = Path(args.sweep_output_dir or "policy/train/sweep_results")
@@ -859,13 +902,17 @@ def run_sweep(
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     base_env_config = dict(ENV_CONFIG)
+    plot_dir: Optional[Path] = None
+    if sweep_plot_dir is not None:
+        plot_dir = Path(sweep_plot_dir)
+        plot_dir.mkdir(parents=True, exist_ok=True)
     tasks: List[dict] = []
 
     for map_name in SWEEP_MAP_LIST:
-        min_agents, max_agents = _agent_range_for_map(map_name)
-        if max_agents <= 0:
+        agent_counts = _agent_counts_for_map(map_name)
+        if not agent_counts:
             continue
-        for agent_num in range(min_agents, max_agents + 1):
+        for agent_num in agent_counts:
             order = len(tasks)
             run_seed = args.seed + order
             run_config = dict(base_env_config)
@@ -877,7 +924,10 @@ def run_sweep(
 
             json_path = output_dir / f"priority_params_{map_name}_agents_{agent_num}.json"
             log_csv_path = logs_dir / f"train_log_{map_name}_agents_{agent_num}.csv"
-            plot_png_path = _derive_plot_path(str(log_csv_path), None)
+            if plot_dir is not None:
+                plot_png_path = plot_dir / f"reward_{map_name}_agents_{agent_num}.png"
+            else:
+                plot_png_path = None
 
             trainer_kwargs = dict(
                 iterations=args.iterations,
@@ -891,7 +941,7 @@ def run_sweep(
                 collision_penalty=collision_penalty_val,
                 save_params_json=str(json_path),
                 log_csv=str(log_csv_path),
-                plot_png=str(plot_png_path) if plot_png_path else None,
+                plot_png=str(plot_png_path.resolve()) if plot_png_path else None,
                 clip_step_norm=args.clip_step_norm,
                 best_update_mode=args.best_update_mode,
                 best_update_alpha=args.best_update_alpha,
