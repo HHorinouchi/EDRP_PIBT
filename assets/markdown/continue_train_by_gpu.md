@@ -26,14 +26,16 @@
 
 ```bash
 python policy/train/continue_train_by_gpu.py \
-  --map-name map_shibuya \
+  --map-name map_5x4 \
   --agent-num 10 \
   --iterations 60 \
-  --population 24 \
-  --episodes-per-candidate 6 \
-  --eval-episodes 8 \
-  --save-params-json outputs/shibuya_10.json \
-  --log-csv outputs/logs/shibuya_10.csv
+  --population 16 \
+  --episodes-per-candidate 8 \
+  --eval-episodes 10 \
+  --candidate-workers 16 \
+  --sweep-plot-dir policy/train/sweep_results/plots \
+  --save-params-json sweep_results/priority_params_map_5x4_agents_10.json \
+  --log-csv sweep_results/logs/train_log_map_5x4_agents_10.csv
 ```
 
 主なオプション:
@@ -51,21 +53,28 @@ python policy/train/continue_train_by_gpu.py \
 | `--domain-randomize` | ロールアウト毎にマップやパラメータをランダム化。
 | `--collision-penalty` | 衝突発生時の報酬を数値で上書き (`none` で従来通り)。
 | `--log-csv` | イテレーション毎のメトリクス出力先。
+| `--plot-png` | 学習曲線を保存する PNG の出力パス。未指定なら `--log-csv` と同じフォルダに `<stem>_learning_curve.png` を作成。 |
 | `--save-params-json` | 最良パラメータの JSON 保存先 (`PriorityParams` のフィールド名で保存)。
 | `--clip-step-norm` | ES 更新ベクトルのノルム制限 (任意)。
 | `--workers` | CPU ロールアウトの並列プロセス数。
-
+| `--candidate-workers` | ES の候補パラメータを並列評価するプロセス数。`-1` で自動的に CPU コア数に設定。 |
+| `--sweep-workers` | スイープ時に同時実行する学習ジョブ数 (デフォルトは `--gpu-devices` の数か 1)。 |
+| `--sweep-plot-dir` | スイープ実行時に各ランの学習曲線 PNG を保存するディレクトリ。指定しない場合は生成しない。 |
+| `--gpu-devices` | 利用するデバイスをカンマ区切りで指定 (`"0,1"`, `"cuda:1,cpu"` など)。スイープ時は順番に割り当て。 |
 ## スイープモード
 
-あらかじめ定義されたマップとエージェント数 (各マップで 3 体からノード数の 3/4 まで) を順番に学習させるには、以下を実行します:
+あらかじめ定義されたマップとエージェント数 (各マップでノード数の 1/4・1/2・3/4 を丸めた値、最低 3 体) を順番に学習させるには、以下を実行します:
+総エピソード数： 
 
 ```bash
 python policy/train/continue_train_by_gpu.py \
   --sweep \
-  --iterations 300 \
-  --population 64 \
-  --episodes-per-candidate 20 \
-  --eval-episodes 100 \
+  --iterations 100 \
+  --population 16 \
+  --episodes-per-candidate 8 \
+  --eval-episodes 10 \
+  --candidate-workers 16 \
+  --sweep-plot-dir policy/train/sweep_results/plots \
   --sweep-output-dir policy/train/sweep_results
 ```
 
@@ -76,6 +85,30 @@ python policy/train/continue_train_by_gpu.py \
 - `policy/train/sweep_results/sweep_summary.json` — マップ・エージェント数・スコア・シード等のメタデータ。
 
 `--sweep` を付けると `--map-name` / `--agent-num` は無視され、指定がある場合は警告を表示します。
+
+## リソース最大活用のヒント
+
+- `--candidate-workers -1` で ES の候補評価を CPU コア数いっぱいに並列化できます。`--workers` も同時に使う場合は、総プロセス数が過剰にならないよう両者の値を調整してください。
+- スイープ時は `--sweep-workers <並列ジョブ数>` と `--gpu-devices 0,1,...` を組み合わせると、各ジョブを異なる GPU に割り当てつつ同時実行できます (例: `--gpu-devices 0,1 --sweep-workers 2`)。
+- `--sweep-plot-dir` を設定すると、各マップ×エージェント数ごとの学習曲線 PNG が指定ディレクトリに自動保存されます。容量が増えるため必要な条件に絞って有効化してください。
+- GPU での計算は ES 更新部のみですが、複数ジョブを並列化することで全 GPU を稼働させられます。CPU 側の環境ロールアウトがボトルネックになるため、必要に応じて `--candidate-workers` や `--workers` を増やしメモリ使用量と相談してください。
+- フルパラレル実行例:
+
+  ```bash
+  python policy/train/continue_train_by_gpu.py \
+    --sweep \
+    --iterations 40 \
+    --population 32 \
+    --episodes-per-candidate 8 \
+    --eval-episodes 20 \
+    --candidate-workers -1 \
+    --workers 2 \
+    --sweep-workers 4 \
+    --gpu-devices 0,1,2,3 \
+    --sweep-output-dir policy/train/sweep_results_fast
+  ```
+
+  上記では 4 ジョブを同時に走らせ、各ジョブ内で候補評価も CPU 全体を用いて並列化します。メモリ使用量が増えるため、並列度は計算資源に合わせて調整してください。
 
 ## 出力と保存物
 

@@ -275,6 +275,11 @@ def detect_actions(env):
 
     row_avail_actions_list = copy.deepcopy(avail_actions_list)
     count = 0
+    speed = float(getattr(env, "speed", 5.0))
+    if speed <= 0:
+        step_tolerance = float("inf")
+    else:
+        step_tolerance = max(1, math.ceil(5.0 / speed)) + 1
     while current_priority < env.agent_num:
         count += 1
         # if count > 10000:
@@ -302,8 +307,8 @@ def detect_actions(env):
             conflict = False
             for check_idx in range(current_priority):
                 higher_agent_idx, _ = priority_order[check_idx]
-                occ_node, _ = occupied_nodes[higher_agent_idx]
-                if occ_node == next_node:
+                occ_node, occ_needed_step = occupied_nodes[higher_agent_idx]
+                if occ_node == next_node and abs(occ_needed_step - needed_step) <= step_tolerance:
                     conflict = True
                     avail_actions.remove(action)
                     break
@@ -319,8 +324,8 @@ def detect_actions(env):
                 current_priority += 1
                 # ノードの占有状況を更新
                 # 停止行動を選択した場合、needed_stepにはneeded_step+1を設定（停止しているため、そのノードは次のステップまで占有される）
-                if action == -1:
-                    occupied_nodes[agent_idx] = (next_node, needed_step + 1)
+                if action < 0:
+                    occupied_nodes[agent_idx] = (env.current_start[agent_idx], needed_step + abs(action))    
                 else:
                     occupied_nodes[agent_idx] = (next_node, needed_step)
                 # エッジの占有状況を更新
@@ -333,11 +338,11 @@ def detect_actions(env):
             # 最上位優先度エージェントの場合、停止を選択
             if current_priority <= most_high_priority:
                 # 最優先エージェントで可能な行動がない場合、停止を選択
-                actions[agent_idx] = -3
+                actions[agent_idx] = -max_wait
                 current_priority += 1
                 most_high_priority += 1
                 # ノードの占有状況を更新
-                occupied_nodes[agent_idx] = (env.current_start[agent_idx], needed_step + 3)
+                occupied_nodes[agent_idx] = (env.current_start[agent_idx], needed_step + max_wait)
                 # エッジの占有状況を更新
                 # エージェントがエッジ上にいる場合、現在ノードから次ノードへのエッジを占有
                 if len(row_avail_actions_list[agent_idx]) == max_wait+1:

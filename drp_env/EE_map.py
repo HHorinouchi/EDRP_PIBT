@@ -333,7 +333,7 @@ class MapMake():
 	# create all tasklist
 	def create_tasklist(self, timelimit, agent_num, task_density):
 		"""Pre-generate a fixed pool of tasks (5×agent_num) for the episode."""
-		total_tasks = max(int(agent_num) * 5, 0)
+		total_tasks = max(int(agent_num) * 3, 0)
 		all_tasks = [self.create_task(timelimit) for _ in range(total_tasks)]
 		steps = max(int(timelimit), 1)
 		tasklist = [[] for _ in range(steps)]

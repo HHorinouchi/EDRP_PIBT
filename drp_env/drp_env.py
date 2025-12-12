@@ -394,7 +394,7 @@ class DrpEnv(gym.Env):
 							self.start_ori_array[i] = self.goal_array[i]
 							#self.goal_array[i] = self.assigned_tasks[i][0]
 						else:
-							print(self.goal_array[i], self.assigned_tasks[i])
+							# print(self.goal_array[i], self.assigned_tasks[i])
 							raise ValueError("Error in task execution")
 				
 				self.obs_prepare[i] = [self.obs[i][0], self.obs[i][1], self.start_ori_array[i], self.goal_array[i]]
@@ -409,7 +409,7 @@ class DrpEnv(gym.Env):
 				self.next_task_idx += 1
 
 		obs = self.obs_manager.calc_obs()
-		print(self.goal_array, self.obs[0][3],self.obs[1][3])
+		# print(self.goal_array, self.obs[0][3],self.obs[1][3])
 
 		# Check whether time is over
 		if self.step_account >= self.time_limit:
