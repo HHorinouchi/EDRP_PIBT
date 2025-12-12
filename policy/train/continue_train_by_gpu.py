@@ -325,7 +325,6 @@ def rollout_once(
     else:
         env = make_env()
     obs = env.reset()
-    print(f"env.speed: {env.speed}")
     done_flags = [False for _ in range(env.agent_num)]
     steps = 0
     step_limit = max_steps if max_steps is not None else getattr(env, "time_limit", None)

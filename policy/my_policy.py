@@ -222,7 +222,6 @@ def detect_actions(env):
         step_tolerance = float("inf")
     else:
         step_tolerance = max(1, math.ceil(5.0 / speed)) + 2
-    print(f"step_tolerance: {step_tolerance}")
     actions = []
     if env.goal_array is None:
         return [-1]*env.agent_num
