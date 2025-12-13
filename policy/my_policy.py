@@ -342,7 +342,11 @@ def detect_actions(env):
                 if action < 0:
                     wait_steps = abs(action)                  # -1 → 1ステップ待機
                     release_node = needed_step + wait_steps   # needed_step はノード到達までのステップ (待機なら0)
-                    occupied_nodes[agent_idx] = (env.current_start[agent_idx], release_node)
+                    # エージェントがcurrent_start[agent_idx]との距離がenv.speed以下の場合、停止している間もそのノードを占有し続ける
+                    if calculate_steps_to_node(env, agent_idx, env.current_start[agent_idx]) <= 5/speed:
+                        occupied_nodes[agent_idx] = (env.current_start[agent_idx], release_node)
+                    else:
+                        occupied_nodes[agent_idx] = (None, None)
                     occupied_edges[agent_idx] = (env.current_start[agent_idx], next_node, release_node)  # エッジは塞がない
                 else:
                     release_node = needed_step                # 到着タイミングでノードを解放
