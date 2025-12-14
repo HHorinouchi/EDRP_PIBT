@@ -44,6 +44,12 @@ for i in range(0, loopnum):
         #     if i < len(env.assigned_tasks):
         #         print(f" Agent {i} assigned task: {env.assigned_tasks[i]}")
 
+        # 各エピソード内で、全タスク完了数が agent_num * 3 に達したら終了
+        # （各エージェントが平均3件ずつタスクを完了したイメージ）
+        if last_completion is not None and last_completion >= env.agent_num * 3:
+            print(f"Episode ended: total task_completion reached {env.agent_num * 3}.")
+            break
+
         if all(done):
             if info.get("collision"):
                 total_collision_ended += 1

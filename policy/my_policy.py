@@ -393,15 +393,11 @@ def detect_actions(env):
                 if len(filtered_edges) == 1:
                     occ_start, occ_end = filtered_edges[0]
                     occupied_edges[agent_idx + env.agent_num] = (occ_start, occ_end, 0)
-                
-                if len(filtered_edges) == 0:
-                    # 次に進むノードがない場合、行動を再選択
-                    action_selected = False
+
                 
                 avail_actions.remove(action)
                 # 一つ行動が決定したらループを抜ける
-                if action_selected:
-                    break
+                break
     
         if not action_selected:
             # 衝突が避けられない場合可能な行動を補填し、一つ上の優先度のエージェントの行動を再選択
