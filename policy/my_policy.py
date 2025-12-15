@@ -15,7 +15,7 @@ TEAM_NAME = "your_team_name"
 # (or the team name if participating as a team).
 ##############################
 
-
+# priority_scoreは高いほうが優先度が低い
 @dataclass
 class PriorityParams:
     """
@@ -31,16 +31,16 @@ class PriorityParams:
     goal_weight: float = 1.0
     pick_weight: float = 1.0
     drop_weight: float = 1.0
-    idle_bias: float = 0.0
+    idle_bias: float = 1.0
     idle_penalty: float = 1000.0
 
     # Task assignment scoring weights
     assign_pick_weight: float = 1.0
-    assign_drop_weight: float = 0.0
-    assign_idle_bias: float = 0.0
+    assign_drop_weight: float = 1.0
+    assign_idle_bias: float = -1.0  # これは、可能な行動数にかけるパラメータ
 
     # Global/system-level weights
-    congestion_weight: float = 0.0  # penalize local congestion around an agent
+    congestion_weight: float = -1.0  # penalize local congestion around an agent
     load_balance_weight: float = 0.0  # bias assignment based on system unassigned ratio
 
     @classmethod
@@ -542,8 +542,11 @@ def _priority_score(env, agent_idx: int, assigned_task: List[int]) -> float:
     """Compute the priority score for an agent given the current policy parameters."""
     params = get_priority_params()
     has_task = bool(assigned_task)
+    # 各エージェントの可能な行動数
+    _, avail_actions = env.get_avail_agent_actions(agent_idx, env.n_actions)
+    avail_actions_num = len(avail_actions)
     if not has_task or len(assigned_task) < 2:
-        return params.idle_penalty + params.idle_bias
+        return params.idle_penalty + params.idle_bias * avail_actions_num
 
     pick_node = assigned_task[0]
     drop_node = assigned_task[1]
@@ -559,4 +562,4 @@ def _priority_score(env, agent_idx: int, assigned_task: List[int]) -> float:
     dist_drop = env.get_path_length(pick_node, drop_node)
     dist_pick = dist_pick if dist_pick is not None else float("inf")
     dist_drop = dist_drop if dist_drop is not None else float("inf")
-    return params.pick_weight * dist_pick + params.drop_weight * dist_drop + params.idle_bias + params.congestion_weight * _agent_congestion(env, agent_idx)
+    return params.pick_weight * dist_pick + params.drop_weight * dist_drop + params.idle_bias * avail_actions_num + params.congestion_weight * _agent_congestion(env, agent_idx)
