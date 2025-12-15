@@ -175,7 +175,14 @@ def rollout_once(
     done_flags = [False for _ in range(env.agent_num)]
     steps = 0
     while not all(done_flags) and steps < max_steps:
-        actions, task_assign = rollout_policy(obs, env)
+        policy_output = rollout_policy(obs, env)
+        if isinstance(policy_output, tuple):
+            if len(policy_output) >= 2:
+                actions, task_assign = policy_output[0], policy_output[1]
+            else:
+                raise ValueError("Policy returned tuple with fewer than two elements")
+        else:
+            raise TypeError("Policy output must be a tuple of (actions, task_assign, ...)")
         obs, step_rewards, done_flags, info = env.step({"pass": actions, "task": task_assign})
         total_reward += float(sum(step_rewards))
         if isinstance(info, dict) and info.get("collision", False):

@@ -4,7 +4,7 @@ import math
 import random
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 import gym
 import networkx as nx
@@ -223,13 +223,6 @@ def detect_actions(env):
     if env.goal_array is None:
         return [-1] * env.agent_num, 0
 
-    speed = float(getattr(env, "speed", 5.0))
-    # ステップ許容誤差（移動にかかるステップ数）
-    if speed <= 0:
-        step_tolerance = float("inf")
-    else:
-        step_tolerance = max(1, math.ceil(5.0 / speed)) + 2
-
     # 各エージェントの優先度スコア計算（ゴールに近いほど優先）
     priority_scores = []
     for i in range(env.agent_num):
@@ -281,10 +274,10 @@ def detect_actions(env):
         agent_avail_actions[i] = sorted_actions
 
     # --- 3. 予約テーブル (Reservation Table) ---
-    # key: node_id, value: (agent_idx, arrival_step)
-    reserved_nodes = {} 
-    # key: (from_node, to_node), value: agent_idx
-    reserved_edges = {}
+    # node -> agent_idx. 選ばれたノードは他エージェントが使用不可。
+    reserved_nodes: Dict[int, int] = {}
+    # edge -> agent_idx. 同じエッジおよび逆走も禁止。
+    reserved_edges: Dict[Tuple[int, int], int] = {}
 
     final_actions = [None] * env.agent_num
     
@@ -306,42 +299,35 @@ def detect_actions(env):
 
         for action in avail_actions:
             # --- 次のノードと必要なステップ数の計算 ---
-            if action < 0: # 待機
+            if action < 0:  # 待機
                 next_node = current_node
-                # 待機の場合、占有時間は現在のステップ数 + 待機時間
-                # 安全のため、次の1ステップ分は確実にその場を占有するとみなす
-                arrival_step = calculate_steps_to_node(env, agent_idx, current_node) + 1
-            else: # 移動
+            else:  # 移動
                 next_node = action
-                arrival_step = calculate_steps_to_node(env, agent_idx, next_node)
 
             # --- 衝突判定 ---
             conflict = False
 
             # A. ノード競合 (Vertex Conflict)
-            # 誰かが既にそのノードを予約していて、かつタイミングが被る場合
-            if next_node in reserved_nodes:
-                res_agent, res_arrival = reserved_nodes[next_node]
-                # タイミングの許容誤差内であれば衝突とみなす
-                if abs(res_arrival - arrival_step) <= step_tolerance:
-                    conflict = True
+            if next_node is not None and next_node in reserved_nodes:
+                conflict = True
 
             # B. エッジ競合 (Edge/Swap Conflict)
             # すれ違い（Swap）の禁止: A->B に行くとき、誰かが B->A に来ていないか
-            if not conflict:
+            if not conflict and next_node is not None and current_node is not None:
                 if (next_node, current_node) in reserved_edges:
                     conflict = True
             
             # C. 同一エッジの同時利用禁止（オプション）
-            if not conflict:
+            if not conflict and next_node is not None and current_node is not None:
                 if (current_node, next_node) in reserved_edges:
                     conflict = True
 
             # --- 行動の仮予約 ---
             if not conflict:
                 # 予約を実行
-                reserved_nodes[next_node] = (agent_idx, arrival_step)
-                if action >= 0: # 移動する場合のみエッジを予約
+                if next_node is not None:
+                    reserved_nodes[next_node] = agent_idx
+                if action >= 0 and current_node is not None and next_node is not None:
                     reserved_edges[(current_node, next_node)] = agent_idx
                 
                 final_actions[agent_idx] = action
@@ -351,9 +337,10 @@ def detect_actions(env):
                     return True # 全員成功
 
                 # --- バックトラック (失敗したので予約を解除) ---
-                del reserved_nodes[next_node]
-                if action >= 0:
-                    del reserved_edges[(current_node, next_node)]
+                if next_node is not None and next_node in reserved_nodes:
+                    reserved_nodes.pop(next_node, None)
+                if action >= 0 and current_node is not None and next_node is not None:
+                    reserved_edges.pop((current_node, next_node), None)
                 
                 final_actions[agent_idx] = None
         

@@ -26,7 +26,7 @@ import torch
 
 from drp_env.drp_env import DrpEnv  # noqa: E402
 from drp_env.EE_map import UNREAL_MAP  # noqa: E402
-from policy.my_policy import (  # noqa: E402
+from policy.my_policy_refactoring import (  # noqa: E402
     PriorityParams,
     get_priority_params,
     policy as rollout_policy,
@@ -156,17 +156,17 @@ MAP_POOL = list(UNREAL_MAP)
 
 # Canonical sweep targets requested for batch training runs.
 SWEEP_MAP_LIST = [
-    "map_3x3",
+    # "map_3x3",
     "map_5x4",
-    "map_8x5",
-    "map_10x6",
-    "map_10x8",
-    "map_10x10",
-    "map_aoba00",
-    "map_aoba01",
+    # "map_8x5",
+    # "map_10x6",
+    # "map_10x8",
+    # "map_10x10",
+    # "map_aoba00",
+    # "map_aoba01",
     "map_kyodai",
-    "map_osaka",
-    "map_paris",
+    # "map_osaka",
+    # "map_paris",
     "map_shibuya",
     "map_shijo",
 ]
@@ -481,8 +481,10 @@ def _save_learning_curve(
         return
 
     try:
-        Path(plot_path).parent.mkdir(parents=True, exist_ok=True)
+        primary_path = Path(plot_path)
+        primary_path.parent.mkdir(parents=True, exist_ok=True)
         iterations_axis = list(range(1, len(history) + 1))
+
         fig, ax1 = plt.subplots()
         line_reward, = ax1.plot(iterations_axis, history, label="reward_mean", color="tab:blue")
         ax1.set_xlabel("iteration")
@@ -491,6 +493,7 @@ def _save_learning_curve(
         legend_lines = [line_reward]
         legend_labels = [line_reward.get_label()]
 
+        collision_array: Optional[np.ndarray] = None
         if collision_history:
             collision_array = np.array(collision_history, dtype=np.float32)
             if np.any(np.isfinite(collision_array)):
@@ -505,14 +508,29 @@ def _save_learning_curve(
                 ax2.tick_params(axis="y", labelcolor="tab:red")
                 legend_lines.append(line_collision)
                 legend_labels.append(line_collision.get_label())
+            else:
+                collision_array = None
 
         ax1.grid(True, axis="x")
         if legend_lines:
             ax1.legend(legend_lines, legend_labels, loc="upper right")
         fig.tight_layout()
-        fig.savefig(plot_path, bbox_inches="tight")
+        fig.savefig(primary_path, bbox_inches="tight")
         plt.close(fig)
-        print(f"Saved plot to: {plot_path}")
+        print(f"Saved plot to: {primary_path}")
+
+        if collision_array is not None:
+            collision_path = primary_path.with_name(f"{primary_path.stem}_collision_rate{primary_path.suffix}")
+            plt.figure()
+            plt.plot(iterations_axis, collision_array, color="tab:red", label="collision_rate")
+            plt.xlabel("iteration")
+            plt.ylabel("collision rate")
+            plt.grid(True, axis="x")
+            plt.legend(loc="upper right")
+            plt.tight_layout()
+            plt.savefig(collision_path, bbox_inches="tight")
+            plt.close()
+            print(f"Saved collision plot to: {collision_path}")
     except Exception as exc:
         print(f"Plotting failed for {plot_path}: {exc}")
     finally:

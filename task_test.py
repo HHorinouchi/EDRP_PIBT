@@ -22,7 +22,7 @@ for i in range(0, loopnum):
     total_count = 0
 
     for step in range(total_steps):
-        env.render()
+        # env.render()
         # print(f"\nStep {step + 1}")
         actions, task, count = policy(n_obs, env)
         joint_action = {"pass": actions, "task": task}

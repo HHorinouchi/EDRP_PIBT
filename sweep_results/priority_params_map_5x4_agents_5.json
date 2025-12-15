@@ -1,0 +1,12 @@
+{
+  "goal_weight": 6.9485249519348145,
+  "pick_weight": 1.0987865924835205,
+  "drop_weight": 0.0,
+  "idle_bias": 1.8326388597488403,
+  "idle_penalty": 1006.5995483398438,
+  "assign_pick_weight": 7.716336727142334,
+  "assign_drop_weight": 0.0,
+  "assign_idle_bias": -9.709521293640137,
+  "congestion_weight": 0.0,
+  "load_balance_weight": 0.7552478909492493
+}

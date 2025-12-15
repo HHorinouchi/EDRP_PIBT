@@ -27,15 +27,15 @@
 ```bash
 python policy/train/continue_train_by_gpu.py \
   --map-name map_5x4 \
-  --agent-num 10 \
+  --agent-num 5 \
   --iterations 60 \
   --population 16 \
   --episodes-per-candidate 8 \
   --eval-episodes 10 \
   --candidate-workers 16 \
   --sweep-plot-dir policy/train/sweep_results/plots \
-  --save-params-json sweep_results/priority_params_map_5x4_agents_10.json \
-  --log-csv sweep_results/logs/train_log_map_5x4_agents_10.csv
+  --save-params-json sweep_results/priority_params_map_5x4_agents_5.json \
+  --log-csv sweep_results/logs/train_log_map_5x4_agents_5.csv
 ```
 
 主なオプション:
