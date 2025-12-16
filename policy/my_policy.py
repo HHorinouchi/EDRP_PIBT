@@ -26,6 +26,7 @@ class PriorityParams:
     drop_weight:     Weight for distance pick->drop when still before pickup.
     idle_bias:       Additive bias applied only when the agent has no task.
     idle_penalty:    Base score given to agents with no task (keeps them last).
+    step_tolerance:  Collision timing tolerance (None uses speed-based default).
     """
 
     goal_weight: float = 1.0
@@ -33,6 +34,7 @@ class PriorityParams:
     drop_weight: float = 1.0
     idle_bias: float = 1.0
     idle_penalty: float = 1000.0
+    step_tolerance: Optional[float] = None
 
     # Task assignment scoring weights
     assign_pick_weight: float = 1.0
@@ -51,6 +53,9 @@ class PriorityParams:
             drop_weight=float(data.get("drop_weight", cls.drop_weight)),
             idle_bias=float(data.get("idle_bias", cls.idle_bias)),
             idle_penalty=float(data.get("idle_penalty", cls.idle_penalty)),
+            step_tolerance=float(data.get("step_tolerance", cls.step_tolerance))
+            if data.get("step_tolerance", cls.step_tolerance) is not None
+            else None,
             assign_pick_weight=float(data.get("assign_pick_weight", cls.assign_pick_weight)),
             assign_drop_weight=float(data.get("assign_drop_weight", cls.assign_drop_weight)),
             assign_idle_bias=float(data.get("assign_idle_bias", cls.assign_idle_bias)),
@@ -217,11 +222,9 @@ def detect_actions(env):
     PIBTをもとに、各エージェントの行動を決定する
     各エージェントの割り当てられたタスクに基づき、そのタスク完了にかかる最短経路で優先順位を決定する
     """
+    params = get_priority_params()
     speed = float(getattr(env, "speed", 5.0))
-    if speed <= 0:
-        step_tolerance = float("inf")
-    else:
-        step_tolerance = max(1, math.ceil(5.0 / speed)) * 2
+    step_tolerance = _resolve_step_tolerance(env, params, speed)
     actions = []
     if env.goal_array is None:
         return [-1]*env.agent_num
@@ -476,6 +479,22 @@ def calculate_steps_to_node(env, agent_idx, target_node):
 
     steps_needed = math.ceil(euclidean_distance / env.speed)
     return steps_needed
+
+
+def _default_step_tolerance(speed: float) -> float:
+    if speed <= 0:
+        return float("inf")
+    return max(1, math.ceil(5.0 / speed)) * 2 + 1
+
+
+def _resolve_step_tolerance(env, params: PriorityParams, speed: float) -> float:
+    value = getattr(params, "step_tolerance", None)
+    if value is not None:
+        try:
+            return float(value)
+        except Exception:
+            pass
+    return _default_step_tolerance(speed)
 
 
 def _agent_congestion(env, agent_idx: int, max_steps: int = 5) -> float:

@@ -26,7 +26,7 @@ import torch
 
 from drp_env.drp_env import DrpEnv  # noqa: E402
 from drp_env.EE_map import UNREAL_MAP  # noqa: E402
-from policy.my_policy_refactoring import (  # noqa: E402
+from policy.my_policy import (  # noqa: E402
     PriorityParams,
     get_priority_params,
     policy as rollout_policy,
@@ -211,6 +211,23 @@ def _agent_counts_for_map(map_name: str) -> List[int]:
     return filtered
 
 
+def _default_step_tolerance_for_speed(speed: float) -> float:
+    if speed <= 0:
+        return float("inf")
+    return max(1, math.ceil(5.0 / speed)) * 2 + 1
+
+
+def _current_step_tolerance_value(params: PriorityParams) -> float:
+    value = getattr(params, "step_tolerance", None)
+    if value is not None:
+        try:
+            return float(value)
+        except Exception:
+            pass
+    base_speed = float(ENV_CONFIG.get("speed", 5.0) or 5.0)
+    return _default_step_tolerance_for_speed(base_speed)
+
+
 @dataclass
 class EpisodeStats:
     reward: float
@@ -263,53 +280,68 @@ def sample_env_config(rng: np.random.Generator) -> dict:
 def make_env_from_config(cfg: dict) -> DrpEnv:
     return DrpEnv(**_normalized_env_config(cfg))
 
-# Parameter vectorization: use exactly the 8 parameters the trainer should learn.
-# Ordered vector (len=8):
+# Parameter vectorization: use exactly the 11 parameters the trainer should learn.
+# Ordered vector (len=11):
 # 0: goal_weight
 # 1: pick_weight
 # 2: drop_weight
-# 3: idle_penalty
-# 4: assign_pick_weight
-# 5: assign_drop_weight
-# 6: assign_idle_bias
-# 7: congestion_weight
+# 3: idle_bias
+# 4: idle_penalty
+# 5: assign_pick_weight
+# 6: assign_drop_weight
+# 7: assign_idle_bias
+# 8: congestion_weight
+# 9: load_balance_weight
+# 10: step_tolerance
 def params_to_vector(params: PriorityParams) -> np.ndarray:
     return np.array(
         [
             params.goal_weight,
             params.pick_weight,
             params.drop_weight,
+            params.idle_bias,
             params.idle_penalty,
             params.assign_pick_weight,
             params.assign_drop_weight,
             params.assign_idle_bias,
             params.congestion_weight,
+            params.load_balance_weight,
+            _current_step_tolerance_value(params),
         ],
         dtype=np.float32,
     )
 
 
 def vector_to_params(vec: np.ndarray) -> PriorityParams:
-    # Convert a length-8 (or shorter) vector back into a PriorityParams object.
-    # For fields not present in the learned vector (idle_bias, load_balance_weight),
-    # preserve the current in-memory params so training does not unexpectedly change them.
+    # Convert a length-11 (or shorter) vector back into a PriorityParams object.
+    # For fields not present in the learned vector, preserve the current in-memory params.
     raw = np.asarray(vec, dtype=np.float32)
     raw = np.where(np.isfinite(raw), raw, 0.0)
-    safe_len = 8
+    safe_len = 11
     z = np.zeros(safe_len, dtype=np.float32)
     z[: min(raw.size, safe_len)] = raw[: min(raw.size, safe_len)]
 
-    goal_w, pick_w, drop_w = np.clip(z[:3], 0.0, 10.0)
-    idle_penalty = float(np.clip(z[3], 0.0, 5000.0))
-    assign_pick = float(np.clip(z[4], 0.0, 10.0))
-    assign_drop = float(np.clip(z[5], 0.0, 10.0))
-    assign_idle_bias = float(np.clip(z[6], -5000.0, 5000.0))
-    congestion_w = float(np.clip(z[7], 0.0, 10.0))
-
-    # Preserve non-learned fields from current in-memory params (if any)
     current = get_priority_params()
-    idle_bias = float(getattr(current, "idle_bias", 0.0))
-    load_balance_w = float(getattr(current, "load_balance_weight", 0.0))
+    idle_bias_default = float(getattr(current, "idle_bias", 0.0))
+    idle_penalty_default = float(getattr(current, "idle_penalty", 0.0))
+    load_balance_default = float(getattr(current, "load_balance_weight", 0.0))
+
+    goal_w, pick_w, drop_w = np.clip(z[:3], 0.0, 10.0)
+    idle_bias = float(np.clip(z[3], -5000.0, 5000.0)) if raw.size >= 4 else idle_bias_default
+    idle_penalty = float(np.clip(z[4], 0.0, 5000.0)) if raw.size >= 5 else idle_penalty_default
+    assign_pick = float(np.clip(z[5], 0.0, 10.0)) if raw.size >= 6 else float(getattr(current, "assign_pick_weight", 0.0))
+    assign_drop = float(np.clip(z[6], 0.0, 10.0)) if raw.size >= 7 else float(getattr(current, "assign_drop_weight", 0.0))
+    assign_idle_bias = float(np.clip(z[7], -5000.0, 5000.0)) if raw.size >= 8 else float(getattr(current, "assign_idle_bias", 0.0))
+    congestion_w = float(np.clip(z[8], -10.0, 10.0)) if raw.size >= 9 else float(getattr(current, "congestion_weight", 0.0))
+    load_balance_w = float(np.clip(z[9], -10.0, 10.0)) if raw.size >= 10 else load_balance_default
+
+    default_step_tol = _default_step_tolerance_for_speed(float(ENV_CONFIG.get("speed", 5.0) or 5.0))
+    if raw.size >= 11:
+        step_tolerance = float(np.clip(z[10], 0.0, 100.0))
+    else:
+        step_tolerance = _current_step_tolerance_value(current)
+    if not np.isfinite(step_tolerance) or step_tolerance <= 0.0:
+        step_tolerance = default_step_tol
 
     return PriorityParams(
         goal_weight=float(goal_w),
@@ -322,6 +354,7 @@ def vector_to_params(vec: np.ndarray) -> PriorityParams:
         assign_idle_bias=assign_idle_bias,
         congestion_weight=congestion_w,
         load_balance_weight=load_balance_w,
+        step_tolerance=step_tolerance,
     )
 
 # Rollout (CPU env). Optionally end on collision and overwrite reward.
