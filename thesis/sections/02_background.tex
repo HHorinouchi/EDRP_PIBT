@@ -1,0 +1,216 @@
+\section{背景となる研究}\label{sec-background}
+本章では、本研究の基礎となるMulti-Agent Path Finding (MAPF) 問題、およびその応用問題であるMulti-Agent Pickup and Delivery (MAPD) 問題について概説する。また、本研究で採用する分散型アルゴリズムであるPIBTについて述べ、その課題を明らかにする。
+
+% =============================================
+% 2.1 MAPF
+% =============================================
+\subsection{Multi-Agent Path Finding (MAPF)}
+MAPF問題は、複数のエージェントが現在位置から目的地まで、互いに衝突することのない経路を計画する問題である。すべてのエージェントが目的地に到達するまでのコスト（総移動時間や移動距離の和など）を最小化することを目標とする。\par
+基本的なMAPF問題は、図\ref{fig:grid_example}に示すようなグリッド環境上で定義されることが多い。しかしながら、ドローン配送のような実世界での運用を考慮した場合、移動空間は必ずしも均質なグリッド構造には限定されず、より柔軟な表現能力を持つモデルが必要となる。そこで本研究では、環境をグリッドではなく図\ref{fig:graph_example}のような一般的な無向グラフとして定義し、従来のMAPF問題を物理的な移動制約を考慮して拡張したモデルを取り扱う。
+
+% --- kuisthesis.sty の独自定義 subfigure を使用 ---
+\begin{figure}[htbp]
+  \centering
+  % 左の画像
+  % kuisthesis.sty で定義された \begin{subfigure} は minipage として動作します
+  \begin{subfigure}[b]{0.45\textwidth}
+    \centering
+    % 画像ファイルがある場合は \includegraphics を使用してください
+    % \includegraphics[width=\linewidth]{images/image1.png}
+    % 【ダミー画像】(コンパイル確認用)
+    \fbox{\parbox[c][3cm]{\linewidth}{\centering Grid Map Image}}
+    \caption{グリッド環境のマップ}
+    \label{fig:grid_example}
+  \end{subfigure}
+  \hfill % 画像間のスペース調整
+  % 右の画像
+  \begin{subfigure}[b]{0.45\textwidth}
+    \centering
+    % \includegraphics[width=\linewidth]{images/image2.png}
+    % 【ダミー画像】
+    \fbox{\parbox[c][3cm]{\linewidth}{\centering Graph Map Image}}
+    \caption{無向グラフ環境のマップ}
+    \label{fig:graph_example}
+  \end{subfigure}
+  % 全体のキャプション
+  \caption{2つの環境モデルの比較。（a）は従来研究で用いられるグリッド環境、（b）は本研究で提案するグラフ環境を示す。}
+  \label{fig:two_images}
+\end{figure}
+
+\subsubsection{問題の定義}
+本研究におけるMAPF問題は、タプル $\mathcal{M} = \langle \mathcal{A}, G, \mathcal{T}, \Sigma, \mathcal{C}, v_{\text{speed}}, d_{\text{safe}} \rangle$ によって定義される。ここで、各要素は以下の通りである。
+
+\begin{itemize}
+    \item $\mathcal{A} = \{a_1, a_2, \dots, a_m\}$ は $m$ 体のエージェントの集合である。
+    \item $G = (V, E)$ は無向グラフであり、$V$ は頂点集合、$E$ は辺集合を表す。
+    \item $\mathcal{T} = \{0, 1, 2, \dots \}$ は離散化された時刻（タイムステップ）の集合である。
+    \item $\Sigma = \{(s_i, g_i) \mid s_i, g_i \in V, a_i \in \mathcal{A}\}$ は各エージェントの始点 $s_i$ と終点 $g_i$ のペアの集合である。
+    \item $\mathcal{C}: V \to \mathbb{R}^2$ は、各ノード $v \in V$ を2次元ユークリッド空間上の座標に対応付ける関数である。
+    \item $v_{\text{speed}} \in \mathbb{R}^+$ は、エージェントが1タイムステップに進むことができる最大物理距離（速度）である。
+    \item $d_{\text{safe}} \in \mathbb{R}^+$ は、エージェント間の衝突を回避するために維持すべき最小の物理的距離（安全距離）である。
+\end{itemize}
+
+\subsubsection{行動モデルと座標定義}
+本問題における解とは、全エージェントの行動計画の集合 $P = \{P_1, P_2, \dots, P_m\}$ である。
+各エージェント $a_i$ の計画 $P_i$ は、終了時刻を $k$ としたとき、各時刻 $t \in \{1, \dots, k\}$ における行動の列 $P_i = \langle act_{i,1}, act_{i,2}, \dots, act_{i,k} \rangle$ で構成される。
+ここで、各行動 $act_{i,t}$ は以下の集合から選択される。
+\begin{equation}
+    act_{i,t} \in V \cup \{\text{stop}\}
+\end{equation}
+
+各行動の意味は以下の通りである。
+\begin{itemize}
+    \item $act_{i,t} = v$ ($v \in V$) の場合、エージェント $a_i$ は隣接するノード $v$ に向かって移動する。ただし、選択できる $v$ は現在の位置から辺 $E$ を介して到達可能なノードに限られる。
+    \item $act_{i,t} = \text{stop}$ の場合、エージェント $a_i$ は現在の座標（ノード上またはエッジ上）に留まる。
+\end{itemize}
+
+これに基づき、時刻 $t$ におけるエージェント $a_i$ の物理的な位置（座標） $\bm{p}_i(t) \in \mathbb{R}^2$ は以下のように定義される。初期位置は $\bm{p}_i(0) = \mathcal{C}(s_i)$ である。
+
+\begin{equation}
+    \bm{p}_i(t) = 
+    \begin{cases}
+        \bm{p}_i(t-1) & \text{if } act_{i,t} = \text{stop} \\
+        \bm{p}_i(t-1) + \delta \cdot \bm{u} & \text{if } act_{i,t} = v
+    \end{cases}
+\end{equation}
+
+ここで、$\bm{u}$ は進行方向の単位ベクトル、$\delta$ は実際の移動距離を表し、以下のように計算される。
+\begin{align}
+    \bm{d} &= \mathcal{C}(v) - \bm{p}_i(t-1) \\
+    \bm{u} &= \frac{\bm{d}}{\lVert \bm{d} \rVert} \\ % \| を \lVert と \rVert に変更
+    \delta &= \min(v_{\text{speed}}, \lVert \bm{d} \rVert) % \| を変更
+\end{align}
+すなわち、エージェントは目的地 $v$ に向かって速度 $v_{\text{speed}}$ 分だけ進むが、目的地までの距離が $v_{\text{speed}}$ 未満の場合は目的地 $\mathcal{C}(v)$ で停止する（オーバーシュートしない）。
+
+\subsubsection{衝突回避制約}
+有効な解であるためには、計画 $P$ は衝突フリー（Collision-Free）でなければならない。
+本研究では、衝突を「ある時刻において、任意の2つのエージェント間の物理的距離が安全距離 $d_{\text{safe}}$ を下回ること」と定義する。
+したがって、以下の制約を満たす必要がある。
+
+\begin{equation}
+    \forall t \in \mathcal{T}, \forall a_i, a_j \in \mathcal{A} \ (i \neq j), \quad \lVert \bm{p}_i(t) - \bm{p}_j(t) \rVert \geq d_{\text{safe}} % \| を変更
+\end{equation}
+
+ここで、$\lVert \cdot \rVert$ はユークリッド距離を表す。この制約を満たし、かつ全てのエージェントについて $\bm{p}_i(k) = \mathcal{C}(g_i)$ となる計画 $P$ を求めることが本問題の目的である。
+
+% =============================================
+% 2.2 MAPD
+% =============================================
+\subsection{Multi-Agent Pickup and Delivery (MAPD)}
+MAPD問題は、MAPF問題を継続的なタスク処理環境へと拡張したものである。MAPFでは全エージェントにあらかじめ固定された始点と終点が与えられるのに対し、MAPDでは新しいタスクが随時発生し、エージェントはそれらを継続的に処理し続ける（Lifelong MAPF）。
+
+\subsubsection{タスクとシステム構成}
+本研究におけるMAPD環境は、前節で定義したMAPFのタプル $\mathcal{M}$ に加え、タスクセット $\Theta$ を導入することで定義される。
+タスクセット $\Theta = \{ \tau_1, \tau_2, \dots \}$ は、システムに投入される配送リクエストの集合である。各タスク $\tau_j \in \Theta$ は以下のタプルで表される。
+
+\begin{equation}
+    \tau_j = \langle v_{j}^{\text{pick}}, v_{j}^{\text{drop}}, t_{j}^{\text{release}} \rangle
+\end{equation}
+
+ここで、各要素は以下の通りである。
+\begin{itemize}
+    \item $v_{j}^{\text{pick}} \in V$: 荷物のピックアップ場所（始点）。
+    \item $v_{j}^{\text{drop}} \in V$: 荷物の配送場所（終点）。
+    \item $t_{j}^{\text{release}} \in \mathcal{T}$: タスクがシステムに発生し、割り当て可能となる時刻。
+\end{itemize}
+
+\subsubsection{エージェントの状態遷移}
+MAPDにおいて、各エージェント $a_i \in \mathcal{A}$ は、自身のタスク保持状況に応じて以下の3つの状態のいずれかをとる。
+
+\begin{enumerate}
+    \item \textbf{Free (待機状態)}: タスクを割り当てられていない状態。
+    \item \textbf{ToPick (ピックアップ移動中)}: タスク $\tau_j$ を割り当てられ、現在位置から $v_{j}^{\text{pick}}$ へ移動している状態。
+    \item \textbf{ToDrop (配送移動中)}: $v_{j}^{\text{pick}}$ に到達して荷物を積載し、目的地 $v_{j}^{\text{drop}}$ へ移動している状態。
+\end{enumerate}
+
+\subsubsection{MAPFとの関係}
+MAPDは、タスク割り当て層と経路計画層の2層構造として捉えることができる。
+各時刻 $t$ において、Free状態のエージェントに対し未割り当てのタスク $\tau_j$ が割り当てられると、そのエージェントの目的地 $g_i$ が更新される。
+
+\begin{equation}
+    g_i = 
+    \begin{cases}
+        v_{j}^{\text{pick}} & (\text{if state is ToPick}) \\
+        v_{j}^{\text{drop}} & (\text{if state is ToDrop}) \\
+        \text{nil} & (\text{if state is Free})
+    \end{cases}
+\end{equation}
+
+このようにして動的に決定される目的地 $g_i$ と、現在のエージェント位置 $\mathbf{p}_i(t)$ を入力として、前節で定義したMAPF問題を各タイムステップ（または一定間隔）で解くことにより、エージェントの具体的な行動 $act_{i,t}$ が決定される。
+本研究の目的は、全てのタスクを完了させるまでの総所要時間、あるいは単位時間あたりのタスク処理数（スループット）を最適化することである。
+
+% =============================================
+% 2.3 PIBT
+% =============================================
+\subsection{Priority Inheritance with Backtracking (PIBT)}
+Priority Inheritance with Backtracking (PIBT) \cite{Okumura19} は，各タイムステップにおいてエージェントの次の移動先を決定するための分散型・反応型のアルゴリズムである．
+従来のCBSのような探索ベースの手法が「全エージェントの全経路」を事前に計算するのに対し，PIBTは「現在の1ステップ先の移動」のみを非常に低い計算コストで決定する．そのため，エージェント数が多い大規模環境や，タスクが逐次発生するMAPDのようなオンライン環境において優れたスケーラビリティを発揮する．
+なお，本節では説明の簡略化のため，図\ref{fig:grid_example}のようなグリッド環境を仮定してPIBTのロジックを解説する．
+
+\subsubsection{動作原理}
+PIBTによる衝突回避は，主に以下の3つのメカニズムによって実現される．
+
+\begin{description}
+  \item[優先度に基づく意思決定]
+  各タイムステップにおいて，全てのエージェントには何らかの規則に基づいて「優先度」が付与される．PIBTは，優先度の高いエージェントから順に次の移動先を決定する．優先度が高いエージェント $a_i$ が隣接ノード $v$ へ移動しようとした際，そのノードが空いている場合は即座に移動が確定する．
+
+  \item[優先度継承 (Priority Inheritance)]
+  PIBTの最大の特徴である．高優先度のエージェント $a_i$ が移動したいノード $v$ に，未だ移動先が決定していない低優先度のエージェント $a_j$ が存在する場合，$a_i$ は $a_j$ に対して自身の優先度を一時的に「継承」させる．
+  優先度を受け取った $a_j$ は，本来の自身の順番を待つことなく，直ちに $a_i$ のために場所を空けるよう移動先を探索・決定する．これにより，高優先度のエージェントの進行方向にある障害（他エージェント）が玉突き的に排除され，スムーズな移動が可能となる．
+
+  \item[バックトラッキング (Backtracking)]
+  もし $a_j$ が周囲を他の高優先度エージェントや障害物に囲まれており，有効な移動先が見つからない場合，移動の試行は失敗とみなされ，呼び出し元である $a_i$ に失敗が通知される．これを受け，$a_i$ は別の候補ノードへの移動を試みるか，その場で待機することになる．このプロセスは再帰的に行われる．
+\end{description}
+
+\subsubsection{アルゴリズムの手順}
+上述の原理に基づく具体的な手続きは以下の通りである．各タイムステップ $t$ において，システムは以下の処理を実行する．
+
+\begin{enumerate}
+  \item 全エージェントを優先度の降順にソートする．
+  \item 未計画のエージェントの中で最も優先度の高いものから順に，関数 \texttt{move($a_i$)} を呼び出す．
+  \item \texttt{move($a_i$)} の内部処理:
+  \begin{itemize}
+    \item $a_i$ の目的地への距離が短くなるような隣接ノード $v$ を候補とする．
+    \item $v$ が空いている（占有予定がない）場合，その場所を確保し終了する．
+    \item $v$ に他のエージェント $a_j$ がいる場合:
+    \begin{itemize}
+        \item もし $a_j$ の移動先が既に決定済みであれば，$v$ への移動は不可とし，別の候補を探す．
+        \item もし $a_j$ の移動先が未定であれば，$a_j$ に優先度を継承し，再帰的に \texttt{move($a_j$)} を呼び出す．
+        \item $a_j$ が移動に成功すれば，$a_i$ は $v$ を確保する．失敗すれば $a_i$ は $v$ への移動を諦め，次の候補を探すか待機を選択する．
+    \end{itemize}
+  \end{itemize}
+\end{enumerate}
+
+このアルゴリズムにより，局所的な衝突を回避しながら，計算時間をエージェント数に対して線形に近いオーダーに抑えることができる．しかし，PIBTの性能（スループットや到達率）は「どのエージェントに高い優先度を与えるか」という優先度規則に強く依存する．単純な規則（例：ランダム，ID順）では，複雑なマップ構造においてデッドロックや非効率な動きが発生しやすいため，本研究ではこの優先度決定の最適化に焦点を当てる．
+
+
+% =============================================
+% 2.4 進化戦略 (Evolution Strategy)
+% =============================================
+\subsection{進化戦略 (Evolution Strategy)}
+本研究では，PIBTにおけるヒューリスティックな優先度パラメータを最適化するために，進化戦略（Evolution Strategy: ES）を用いる．進化戦略は，生物の進化の過程に着想を得たブラックボックス最適化手法の一種であり，関数の勾配情報が得られない，あるいは勾配の計算が困難な問題に対して有効である\cite{Rechenberg73}．
+
+強化学習（Reinforcement Learning: RL）がエージェントの行動に対する価値関数や方策勾配を学習するのに対し，進化戦略はパラメータ空間上で直接探索を行う．Salimansら\cite{Salimans17}は，進化戦略が深層強化学習の代替として競争力のある性能を発揮し，特に並列化効率において優れていることを示した．MAPD問題のようなマルチエージェントシミュレーションは，エージェント間の相互作用が複雑であり，報酬関数が微分不可能であるため，勾配を用いないESのアプローチは適している．
+
+\subsubsection{アルゴリズムの概要}
+一般的な進化戦略（Natural Evolution Strategiesの変種）では，パラメータベクトル $\theta$ を中心とした正規分布 $\mathcal{N}(\theta, \sigma^2 I)$ から，摂動（ノイズ） $\epsilon_i$ を加えた $N$ 個の候補パラメータ $\theta_i = \theta + \sigma \epsilon_i$ を生成する（ここで $\sigma$ はノイズの標準偏差である）．
+各候補パラメータを用いて環境でシミュレーションを行い，得られた報酬 $F(\theta_i)$ を評価値とする．パラメータの更新は，高い報酬を得た方向へ分布の中心を移動させることで行われる．更新則は次式で近似される．
+
+\begin{equation}
+    \theta \leftarrow \theta + \alpha \frac{1}{N \sigma} \sum_{i=1}^{N} F(\theta + \sigma \epsilon_i) \epsilon_i
+\end{equation}
+
+ここで，$\alpha$ は学習率を表す．この更新式は，期待報酬の勾配を有限差分法により確率的に推定していると解釈できる．
+
+\subsubsection{安定化のための技術}
+本研究の実装においては，学習の安定性と収束速度を向上させるために，以下の2つの主要な技術を導入している．
+
+\begin{description}
+    \item[対抗変数法 (Antithetic Sampling)]
+    勾配推定の分散を低減させるための手法である\cite{Geweke88}．ランダムなノイズ $\epsilon$ を生成する際，$\epsilon$ とその反転である $-\epsilon$ のペアを同時に個体群として生成する．これにより，正負の摂動に対する対称的なサンプリングが保証され，サンプリングノイズによる推定精度の悪化を抑制する効果がある．
+
+    \item[適合度シェイピング (Fitness Shaping)]
+    得られた報酬 $F(\theta_i)$ をそのまま重みとして使うのではなく，集団内での順位（ランク）に基づいて変換する手法である\cite{Wierstra14}．具体的には，報酬の値を昇順に並べ替え，[-0.5, 0.5] の範囲などに正規化して利用する．これにより，極端に大きな報酬値（外れ値）が勾配推定に与える過度な影響を排除し，局所解への早期収束を防ぐロバストな学習が可能となる．
+\end{description}
+
+本研究では，これらの拡張を施した進化戦略を用いて，PIBTにおける優先度決定のための重みパラメータ（ゴールへの距離，エージェント間の混雑度などの重み係数）を最適化する．
