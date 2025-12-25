@@ -1,0 +1,39 @@
+\begin{thebibliography}{10}
+
+\bibitem{Kornhauser84}
+Kornhauser, D., Miller, G.~L. and Spirakis, P.~G.: Coordinating pebble motion on graphs, the diameter of permutation groups, and applications, pp.\ 241--250 (1984).
+
+\bibitem{Silver05}
+Silver, D.: Cooperative Pathfinding, pp.\ 117--122 (2005).
+
+\bibitem{Wurman08}
+Wurman, P.~R., D'Andrea, R. and Mountz, M.: Coordinating Hundreds of Cooperative, Autonomous Vehicles in Warehouses, {\em AI Magazine\/},  Vol.~29, pp.\ 9--20 (2008).
+
+\bibitem{Morris16}
+Morris, R., P\u{a}s\u{a}reanu, C.~S., Luckow, K., Malik, W., Ma, H., Kumar, T. K.~S. and Koenig, S.: Planning, Scheduling and Monitoring for Airport Surface Operations (2016).
+
+\bibitem{Dresner08}
+Dresner, K. and Stone, P.: A Multiagent Approach to Autonomous Intersection Management, {\em Journal of Artificial Intelligence Research (JAIR)\/},  Vol.~31, pp.\ 591--656 (2008).
+
+\bibitem{Ma17}
+Ma, H., Li, J., Kumar, T. K.~S. and Koenig, S.: Lifelong Multi-Agent Path Finding for Online Pickup and Delivery Tasks, pp.\ 837--845 (2017).
+
+\bibitem{Sharon15}
+Sharon, G., Stern, R., Felner, A. and Sturtevant, N.~R.: Conflict-based search for optimal multi-agent pathfinding, {\em Artificial Intelligence\/},  Vol.~219, pp.\ 40--66 (2015).
+
+\bibitem{Okumura19}
+Okumura, K., Machida, M., D{\'e}fago, X. and Tamura, Y.: Priority Inheritance with Backtracking for Iterative Multi-agent Path Finding,  Vol.~310, pp.\ 535--542 (2019).
+
+\bibitem{Rechenberg73}
+Rechenberg, I.: {\em Evolutionsstrategie: Optimierung technischer Systeme nach Prinzipien der biologischen Evolution\/}, Frommann-Holzboog (1973).
+
+\bibitem{Salimans17}
+Salimans, T., Ho, J., Chen, X., Sidor, S. and Sutskever, I.: Evolution Strategies as a Scalable Alternative to Reinforcement Learning, {\em arXiv preprint arXiv:1703.03864\/} (2017).
+
+\bibitem{Geweke88}
+Geweke, J.: Antithetic acceleration of Monte Carlo integration in Bayesian inference, {\em Journal of Econometrics\/},  Vol.~38, No.~1-2, pp.\ 73--89 (1988).
+
+\bibitem{Wierstra14}
+Wierstra, D., Schaul, T., Glasmachers, T., Sun, Y., Peters, J. and Schmidhuber, J.: Natural evolution strategies, {\em The Journal of Machine Learning Research\/},  Vol.~15, No.~1, pp.\ 949--980 (2014).
+
+\end{thebibliography}

@@ -1,0 +1,23 @@
+\begin{jabstract}				% 和文梗概
+近年，電子商取引の拡大や労働力不足を背景に，物流倉庫やドローン配送などの実世界アプリケーションにおいて，複数の自律移動ロボットを用いた搬送作業の自動化が急速に進展している．このようなシステムでは，複数のエージェントが衝突することなく，かつ効率的にタスクを処理するための経路計画，すなわち Multi-Agent Pickup and Delivery (MAPD) 問題の解決が不可欠である．従来の MAPD 研究の多くは，環境を均質なグリッド世界としてモデル化し，離散的な時間・空間上でのアルゴリズム検証を行ってきた．しかし，実際のドローン運航や複雑なレイアウトを持つ倉庫環境などを考慮すると，移動空間は必ずしもグリッド構造には限定されず，ノード間の距離やエージェントの物理的な速度，安全距離といった連続的な制約を含む一般的な無向グラフとしてモデル化することが，実用的な観点から極めて重要となる．\par
+
+本研究では，このような物理的制約を考慮したグラフ環境上での Lifelong MAPD 問題を対象とし，分散型経路計画アルゴリズムである Priority Inheritance with Backtracking (PIBT) を用いた効率的な配送制御手法について論じる．PIBT は計算コストが低くリアルタイム性に優れる一方で，その探索性能やデッドロック回避能力は，各エージェントの行動優先度を決定するヒューリスティックなパラメータに強く依存するという性質を持つ．従来，この優先度は目的地までの距離など単純な指標で決定されることが多かったが，複雑なグラフ構造や変動するタスク密度においては，混雑度やタスクの進行状態（ピックアップ前後）を考慮した動的な優先度調整が必要となる．しかし，これらのパラメータを環境ごとに人手で調整することは困難であり，環境の特性に応じた最適なパラメータ設計が課題となっている．\par
+
+そこで本研究では，進化計算の一種である Evolution Strategy (ES) を用いて，PIBT の優先度決定パラメータおよびタスク割り当てパラメータを自動最適化するフレームワークを提案する．具体的には，目的地への距離，待機ペナルティ，周辺の混雑度，およびタスクの処理段階に応じた重み付け係数を遺伝子として定義し，シミュレーション環境におけるタスク処理数や衝突率，移動コストを報酬関数として学習を行う．提案手法の特徴は，単に特定の環境で性能を最大化する「特化型」の学習だけでなく，異なるマップ構造やエージェント数においても一定の性能を維持する「汎化性能」に着目している点にある．特定のマップ（例：渋谷マップなど）やエージェント密度に過剰適合させたパラメータは，その環境下では極めて高いスループットを発揮する一方で，未知の環境に対しては脆弱になる可能性がある．本研究では，単一環境学習と複数環境学習の比較を通じて，環境構造と最適な優先度パラメータの相関関係を分析する．
+
+\end{jabstract}
+
+\begin{eabstract}				% 英文梗概
+This guide describes how to write your guraduation thesis
+according to the regulation of Computer Science Course, 
+School of Informatics and Mathematical Science,
+Faculty of Engineering Kyoto University. 
+This regulation specifies the rules about the structure 
+and format of the thesis which you need to follow in writing.
+This guide also explains how to use a \LaTeX{} style file for
+graduation thesis, named \verb|kuisthesis|, 
+with which you can easily produce a well-formatted thesis. 
+This guide itself is written using \verb|kuisthesis|; 
+the source code may be helpful 
+if you would like to know how to use this style file.
+\end{eabstract}
