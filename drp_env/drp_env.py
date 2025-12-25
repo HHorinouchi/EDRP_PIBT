@@ -186,6 +186,10 @@ class DrpEnv(gym.Env):
 		# for tasklist
 		self.task_completion = 0
 		#print('Environment reset obs: \n', self.obs)
+		self.last_info = None
+		self.last_episode_reward = None
+		self.last_termination_reason = None
+		self.last_episode_steps = None
 
 		obs = self.obs_manager.calc_obs()
 
@@ -507,7 +511,43 @@ class DrpEnv(gym.Env):
 		
 
 	def close(self):
-		print('Environment CLOSE')
+		reason = None
+		if isinstance(self.last_termination_reason, str):
+			reason = self.last_termination_reason
+		if reason is None and isinstance(getattr(self, "last_info", None), dict):
+			info = self.last_info
+			if bool(info.get("collision")):
+				reason = "collision"
+			elif bool(info.get("goal")):
+				reason = "task_completed"
+			elif bool(info.get("timeup")):
+				reason = "time_up"
+		if reason is None:
+			if isinstance(getattr(self, "terminated", None), list) and all(getattr(self, "terminated", []) or []):
+				reason = "task_completed"
+			elif getattr(self, "time_limit", None) is not None and getattr(self, "step_account", 0) >= int(self.time_limit):
+				reason = "time_up"
+		if reason is None and bool(getattr(self, "log", {}).get("collision", False)):
+			reason = "collision"
+		if reason is None:
+			reason = "unknown"
+		reward_val = getattr(self, "last_episode_reward", None)
+		steps_val = getattr(self, "last_episode_steps", None)
+		if reward_val is None:
+			reward_str = "unknown"
+		else:
+			try:
+				reward_str = f"{float(reward_val):.2f}"
+			except Exception:
+				reward_str = "unknown"
+		if steps_val is None:
+			steps_str = "unknown"
+		else:
+			try:
+				steps_str = str(int(steps_val))
+			except Exception:
+				steps_str = "unknown"
+		print(f"Environment CLOSE (reason={reason}, reward={reward_str}, steps={steps_str})")
 		return None
     
 	def get_pos_list(self):

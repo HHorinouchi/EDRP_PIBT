@@ -28,14 +28,15 @@
 python policy/train/continue_train_by_gpu.py \
   --map-name map_5x4 \
   --agent-num 5 \
-  --iterations 60 \
+  --iterations 300 \
   --population 16 \
   --episodes-per-candidate 8 \
-  --eval-episodes 10 \
+  --eval-episodes 16 \
   --candidate-workers 16 \
   --sweep-plot-dir policy/train/sweep_results/plots \
   --save-params-json sweep_results/priority_params_map_5x4_agents_5.json \
-  --log-csv sweep_results/logs/train_log_map_5x4_agents_5.csv
+  --log-csv /sweep_results/logs/train_log_map_5x4_agents_5.csv\
+  --resume
 ```
 
 主なオプション:
@@ -69,13 +70,15 @@ python policy/train/continue_train_by_gpu.py \
 ```bash
 python policy/train/continue_train_by_gpu.py \
   --sweep \
-  --iterations 100 \
-  --population 16 \
-  --episodes-per-candidate 8 \
-  --eval-episodes 10 \
+  --iterations 300 \
+  --population 32 \
+  --episodes-per-candidate 20 \
+  --eval-episodes 20 \
   --candidate-workers 16 \
+  --workers 0 \
   --sweep-plot-dir policy/train/sweep_results/plots \
-  --sweep-output-dir policy/train/sweep_results
+  --sweep-output-dir policy/train/sweep_results \
+  --resume
 ```
 
 出力構成:
@@ -98,7 +101,7 @@ python policy/train/continue_train_by_gpu.py \
   python policy/train/continue_train_by_gpu.py \
     --sweep \
     --iterations 40 \
-    --population 32 \
+    --population 16 \
     --episodes-per-candidate 8 \
     --eval-episodes 20 \
     --candidate-workers -1 \

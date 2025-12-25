@@ -114,22 +114,151 @@ def _resolve_device(device_override: Optional[str]) -> torch.device:
     return torch.device("cpu")
 
 
-def _compute_time_limit(agent_num: Optional[int]) -> int:
+DEFAULT_SPEED = 5.0
+MAP_DIMENSION_CACHE: Dict[str, Tuple[float, float]] = {}
+
+
+def _get_map_dimensions(map_name: Optional[str]) -> Tuple[float, float]:
+    if not map_name:
+        return 0.0, 0.0
+    cached = MAP_DIMENSION_CACHE.get(map_name)
+    if cached is not None:
+        return cached
+    node_csv_path = ROOT_DIR / "drp_env" / "map" / map_name / "node.csv"
+    if not node_csv_path.exists():
+        MAP_DIMENSION_CACHE[map_name] = (0.0, 0.0)
+        return 0.0, 0.0
+
+    scale = 1.0 if map_name in UNREAL_MAP else 1e5
+    min_x = float("inf")
+    max_x = float("-inf")
+
+    min_y = float("inf")
+    max_y = float("-inf")
+
     try:
-        value = int(agent_num)
-    except (TypeError, ValueError):
-        value = 0
-    if value <= 0:
-        value = 1
-    # Time limit = agent_num × 5 × 50
-    return max(value * 5 * 50, 1)
+        with node_csv_path.open("r", newline="") as f:
+            reader = csv.reader(f)
+            header_skipped = False
+            for row in reader:
+                if not header_skipped:
+                    header_skipped = True
+                    continue
+                if len(row) < 3:
+                    continue
+                try:
+                    x_val = float(row[1]) * scale
+                    y_val = float(row[2]) * scale
+                except (ValueError, TypeError):
+                    continue
+                min_x = min(min_x, x_val)
+                max_x = max(max_x, x_val)
+                min_y = min(min_y, y_val)
+                max_y = max(max_y, y_val)
+    except Exception:
+        MAP_DIMENSION_CACHE[map_name] = (0.0, 0.0)
+        return 0.0, 0.0
+
+    if not (math.isfinite(min_x) and math.isfinite(max_x) and math.isfinite(min_y) and math.isfinite(max_y)):
+        MAP_DIMENSION_CACHE[map_name] = (0.0, 0.0)
+        return 0.0, 0.0
+
+    width = max(max_x - min_x, 0.0)
+    height = max(max_y - min_y, 0.0)
+    dims = (width, height)
+    MAP_DIMENSION_CACHE[map_name] = dims
+    return dims
+
+
+def _compute_time_limit(
+    agent_num: Optional[int],
+    map_name: Optional[str] = None,
+    speed: Optional[float] = None,
+) -> int:
+    speed_val = DEFAULT_SPEED
+    if speed is not None:
+        try:
+            speed_val = float(speed)
+        except (TypeError, ValueError):
+            speed_val = DEFAULT_SPEED
+    speed_val = max(speed_val, 1e-6)
+
+    width, height = _get_map_dimensions(map_name)
+    if width <= 0.0 and height <= 0.0:
+        return 200
+
+    diagonal = width + height
+    if diagonal <= 0.0:
+        return 200
+
+    time_limit = diagonal * 6.0 / speed_val
+    # print(f"Map name: {map_name}, dimensions: width={width:.2f}, height={height:.2f}")
+    # print(f"Computed time limit: diagonal={diagonal:.2f}, speed={speed_val:.2f} -> time_limit={time_limit:.2f}")
+    return max(int(math.ceil(time_limit)), 1)
 
 
 def _normalized_env_config(cfg: dict) -> dict:
     normalized = dict(cfg)
     agent_num = normalized.get("agent_num")
-    normalized["time_limit"] = _compute_time_limit(agent_num)
+    map_name = normalized.get("map_name")
+    speed = normalized.get("speed")
+    normalized["time_limit"] = _compute_time_limit(agent_num, map_name, speed)
     return normalized
+
+
+def _load_resume_state(log_csv: Optional[str]) -> Optional[Tuple[np.ndarray, int, Dict[str, float]]]:
+    """Return (vector, next_iteration_index, last_row_metrics) from the last row of an existing log."""
+    if not log_csv or not os.path.exists(log_csv):
+        return None
+    try:
+        with open(log_csv, "r", newline="") as f:
+            reader = csv.DictReader(f)
+            last_row: Optional[dict] = None
+            for row in reader:
+                last_row = row
+        if not last_row:
+            return None
+        vec_values: List[float] = []
+        dim_idx = 0
+        while True:
+            key = f"v{dim_idx}"
+            if key not in last_row:
+                break
+            raw_val = last_row[key]
+            if raw_val is None or raw_val == "":
+                break
+            try:
+                vec_values.append(float(raw_val))
+            except Exception:
+                break
+            dim_idx += 1
+        if not vec_values:
+            return None
+        iter_val_raw = last_row.get("iter")
+        try:
+            iter_val = int(float(iter_val_raw)) if iter_val_raw is not None else dim_idx
+        except Exception:
+            iter_val = dim_idx
+        metrics: Dict[str, float] = {}
+        numeric_keys = {
+            "reward_mean",
+            "reward_std",
+            "reward_max",
+            "best_goal_rate",
+            "best_collision_rate",
+            "best_timeup_rate",
+            "best_avg_steps",
+            "best_avg_task_completion",
+        }
+        for key, value in last_row.items():
+            if key in numeric_keys:
+                try:
+                    metrics[key] = float(value)
+                except Exception:
+                    continue
+        return np.asarray(vec_values, dtype=np.float32), int(iter_val) + 1, metrics
+    except Exception:
+        return None
 
 # Base environment configuration (single-map specialization by default)
 ENV_CONFIG = dict(
@@ -139,12 +268,14 @@ ENV_CONFIG = dict(
     goal_array=[],
     visu_delay=0.0,
     state_repre_flag="onehot",
-    time_limit=_compute_time_limit(10),
     collision="bounceback",
     task_flag=True,
     reward_list={"goal": 100, "collision": -100, "wait": -10, "move": -1},
     map_name="map_shibuya",
     task_density=1.0,
+)
+ENV_CONFIG["time_limit"] = _compute_time_limit(
+    ENV_CONFIG.get("agent_num"), ENV_CONFIG.get("map_name"), ENV_CONFIG.get("speed")
 )
 
 def make_env() -> DrpEnv:
@@ -164,10 +295,10 @@ SWEEP_MAP_LIST = [
     # "map_10x10",
     # "map_aoba00",
     # "map_aoba01",
-    "map_kyodai",
+    # "map_kyodai",
     # "map_osaka",
-    # "map_paris",
-    "map_shibuya",
+    "map_paris",
+    # "map_shibuya",
     "map_shijo",
 ]
 
@@ -197,7 +328,7 @@ def _agent_counts_for_map(map_name: str) -> List[int]:
     n_nodes = _get_map_node_count(map_name)
     if n_nodes <= 0:
         return []
-    ratios = (0.25, 0.5, 0.75)
+    ratios = (0.25, 0.5)    # エージェント数の設定（マップのノード数との割合）
     counts = set()
     for ratio in ratios:
         value = int(math.floor(n_nodes * ratio))
@@ -214,7 +345,7 @@ def _agent_counts_for_map(map_name: str) -> List[int]:
 def _default_step_tolerance_for_speed(speed: float) -> float:
     if speed <= 0:
         return float("inf")
-    return max(1, math.ceil(5.0 / speed)) * 2 + 1
+    return max(1, math.ceil(5.0 / speed)) + 1
 
 
 def _current_step_tolerance_value(params: PriorityParams) -> float:
@@ -261,7 +392,7 @@ def sample_env_config(rng: np.random.Generator) -> dict:
     speed = float(rng.uniform(0.8, 2.0))
     collision = "bounceback" if rng.random() < 0.7 else "terminated"
     task_density = float(rng.uniform(0.3, 1.5))
-    time_limit = _compute_time_limit(agent_num)
+    time_limit = _compute_time_limit(agent_num, map_name, speed)
     return dict(
         agent_num=agent_num,
         speed=speed,
@@ -273,7 +404,7 @@ def sample_env_config(rng: np.random.Generator) -> dict:
         collision=collision,
         task_flag=True,
         task_density=task_density,
-        reward_list={"goal": 20*time_limit, "collision": -10*agent_num*time_limit, "wait": -10, "move": -1},
+        reward_list={"goal": 20*time_limit, "collision": -100*agent_num*time_limit, "wait": -10, "move": -1},
         map_name=map_name,
     )
 
@@ -281,7 +412,7 @@ def make_env_from_config(cfg: dict) -> DrpEnv:
     return DrpEnv(**_normalized_env_config(cfg))
 
 # Parameter vectorization: use exactly the 11 parameters the trainer should learn.
-# Ordered vector (len=11):
+# Ordered vector (len=9):
 # 0: goal_weight
 # 1: pick_weight
 # 2: drop_weight
@@ -289,10 +420,8 @@ def make_env_from_config(cfg: dict) -> DrpEnv:
 # 4: idle_penalty
 # 5: assign_pick_weight
 # 6: assign_drop_weight
-# 7: assign_idle_bias
-# 8: congestion_weight
-# 9: load_balance_weight
-# 10: step_tolerance
+# 7: congestion_weight
+# 8: step_tolerance
 def params_to_vector(params: PriorityParams) -> np.ndarray:
     return np.array(
         [
@@ -303,9 +432,7 @@ def params_to_vector(params: PriorityParams) -> np.ndarray:
             params.idle_penalty,
             params.assign_pick_weight,
             params.assign_drop_weight,
-            params.assign_idle_bias,
             params.congestion_weight,
-            params.load_balance_weight,
             _current_step_tolerance_value(params),
         ],
         dtype=np.float32,
@@ -317,27 +444,24 @@ def vector_to_params(vec: np.ndarray) -> PriorityParams:
     # For fields not present in the learned vector, preserve the current in-memory params.
     raw = np.asarray(vec, dtype=np.float32)
     raw = np.where(np.isfinite(raw), raw, 0.0)
-    safe_len = 11
+    safe_len = 9
     z = np.zeros(safe_len, dtype=np.float32)
     z[: min(raw.size, safe_len)] = raw[: min(raw.size, safe_len)]
 
     current = get_priority_params()
     idle_bias_default = float(getattr(current, "idle_bias", 0.0))
     idle_penalty_default = float(getattr(current, "idle_penalty", 0.0))
-    load_balance_default = float(getattr(current, "load_balance_weight", 0.0))
 
     goal_w, pick_w, drop_w = np.clip(z[:3], 0.0, 10.0)
     idle_bias = float(np.clip(z[3], -5000.0, 5000.0)) if raw.size >= 4 else idle_bias_default
     idle_penalty = float(np.clip(z[4], 0.0, 5000.0)) if raw.size >= 5 else idle_penalty_default
     assign_pick = float(np.clip(z[5], 0.0, 10.0)) if raw.size >= 6 else float(getattr(current, "assign_pick_weight", 0.0))
     assign_drop = float(np.clip(z[6], 0.0, 10.0)) if raw.size >= 7 else float(getattr(current, "assign_drop_weight", 0.0))
-    assign_idle_bias = float(np.clip(z[7], -5000.0, 5000.0)) if raw.size >= 8 else float(getattr(current, "assign_idle_bias", 0.0))
-    congestion_w = float(np.clip(z[8], -10.0, 10.0)) if raw.size >= 9 else float(getattr(current, "congestion_weight", 0.0))
-    load_balance_w = float(np.clip(z[9], -10.0, 10.0)) if raw.size >= 10 else load_balance_default
+    congestion_w = float(np.clip(z[7], -10.0, 10.0)) if raw.size >= 8 else float(getattr(current, "congestion_weight", 0.0))
 
     default_step_tol = _default_step_tolerance_for_speed(float(ENV_CONFIG.get("speed", 5.0) or 5.0))
-    if raw.size >= 11:
-        step_tolerance = float(np.clip(z[10], 0.0, 100.0))
+    if raw.size >= 9:
+        step_tolerance = float(np.clip(z[8], 0.0, 100.0))
     else:
         step_tolerance = _current_step_tolerance_value(current)
     if not np.isfinite(step_tolerance) or step_tolerance <= 0.0:
@@ -351,9 +475,7 @@ def vector_to_params(vec: np.ndarray) -> PriorityParams:
         idle_penalty=idle_penalty,
         assign_pick_weight=assign_pick,
         assign_drop_weight=assign_drop,
-        assign_idle_bias=assign_idle_bias,
         congestion_weight=congestion_w,
-        load_balance_weight=load_balance_w,
         step_tolerance=step_tolerance,
     )
 
@@ -364,24 +486,44 @@ def rollout_once(
     domain_randomize: bool,
     collision_penalty: Optional[float],
     seed: Optional[int] = None,
+    env: Optional[DrpEnv] = None,
+    verbose: bool = False,
 ) -> EpisodeStats:
     if seed is not None:
         # Make env seeding deterministic-ish per worker
         np.random.seed(seed)
     params = vector_to_params(params_vec)
     set_priority_params(params)
-    if domain_randomize:
+    owns_env = env is None
+    if owns_env:
+        if domain_randomize:
+            rng = np.random.default_rng(seed)
+            cfg = sample_env_config(rng)
+            env = make_env_from_config(cfg)
+        else:
+            env = make_env()
+    elif domain_randomize:
+        # reuse is incompatible with domain randomization, create fresh env
         rng = np.random.default_rng(seed)
         cfg = sample_env_config(rng)
         env = make_env_from_config(cfg)
-    else:
-        env = make_env()
+        owns_env = True
+    assert env is not None
     obs = env.reset()
     done_flags = [False for _ in range(env.agent_num)]
     steps = 0
     step_limit = max_steps if max_steps is not None else getattr(env, "time_limit", None)
     if step_limit is None or step_limit <= 0:
         step_limit = 10**9
+    episode_start_wall = time.time()
+    forced_wall_timeout = False
+    # Fallback wall timeout derived from time_limit if available
+    env_time_limit = getattr(env, "time_limit", None)
+    wall_timeout_seconds: Optional[float]
+    if env_time_limit is not None and isinstance(env_time_limit, (int, float)):
+        wall_timeout_seconds = max(float(env_time_limit) * 0.5, 0.0)
+    else:
+        wall_timeout_seconds = None
     last_info: dict = {
         "task_completion": 0.0,
         "collision": False,
@@ -389,6 +531,16 @@ def rollout_once(
         "timeup": False,
     }
     while not all(done_flags) and steps < step_limit:
+        if (
+            not forced_wall_timeout
+            and wall_timeout_seconds is not None
+            and (time.time() - episode_start_wall) >= wall_timeout_seconds
+        ):
+            forced_wall_timeout = True
+            last_info = dict(last_info)
+            last_info["collision"] = True
+            done_flags = [True for _ in range(env.agent_num)]
+            break
         policy_output = rollout_policy(obs, env)
         if isinstance(policy_output, tuple):
             if len(policy_output) >= 3:
@@ -418,7 +570,6 @@ def rollout_once(
         #     # タスクをアサインされている場合、そのタスクも表示
         #     if i < len(env.assigned_tasks):
         #         print(f" Agent {i} assigned task: {env.assigned_tasks[i]}")
-    env.close()
     tasks_completed = float(last_info.get("task_completion", getattr(env, "task_completion", 0)))
     r_goal = float(getattr(env, "r_goal", 0.0))
     r_move = float(getattr(env, "r_move", 0.0))
@@ -426,19 +577,38 @@ def rollout_once(
     speed = float(getattr(env, "speed", 1.0))
     goal_reward = tasks_completed * r_goal / 10
     step_penalty = steps * r_move
-    collision_term = (r_coll * speed) if last_info.get("collision", False) else 0.0
-    final_reward = goal_reward + step_penalty + collision_term
-    if collision_penalty is not None and last_info.get("collision", False):
+    penalty_reason: Optional[str] = None
+    penalty_term = 0.0
+    time_cap = getattr(env, "time_limit", None)
+    if time_cap is None or time_cap <= 0:
+        time_cap = max(steps, 1)
+    timeup_triggered = bool(last_info.get("timeup", False)) or (
+        step_limit is not None and steps >= step_limit
+    )
+    if last_info.get("collision", False):
+        penalty_reason = "collision"
+        remaining = max(float(time_cap - steps), 0.0)
+        scale = 1.0 + (remaining / max(float(time_cap), 1.0))
+        penalty_term = (r_coll * speed) * scale
+    elif timeup_triggered:
+        penalty_reason = "timeup"
+        penalty_term = (r_coll * speed)
+    final_reward = goal_reward + step_penalty + penalty_term
+    if collision_penalty is not None and penalty_reason is not None:
         final_reward += float(collision_penalty)
 
-    print(
-        " Episode stats -> reward: {:.2f}, tasks: {:.0f}, steps: {}, collision: {}".format(
-            final_reward,
-            tasks_completed,
-            steps,
-            bool(last_info.get("collision", False)),
+    if forced_wall_timeout:
+        print("[WARN] Episode terminated due to wall-clock timeout (treated as collision).")
+
+    if verbose:
+        print(
+            " Episode stats -> reward: {:.2f}, tasks: {:.0f}, steps: {}, collision: {}".format(
+                final_reward,
+                tasks_completed,
+                steps,
+                bool(last_info.get("collision", False)),
+            )
         )
-    )
 
     episode_stats = EpisodeStats(
         reward=float(final_reward),
@@ -448,6 +618,28 @@ def rollout_once(
         goal=bool(last_info.get("goal", False)),
         timeup=bool(last_info.get("timeup", False)),
     )
+    termination_reason = "unknown"
+    if episode_stats.collision:
+        termination_reason = "collision"
+    elif episode_stats.goal:
+        termination_reason = "task completed"
+    elif episode_stats.timeup or (step_limit is not None and steps >= step_limit):
+        termination_reason = "time up"
+
+    try:
+        env.last_info = dict(last_info)
+        env.last_termination_reason = termination_reason
+        env.last_episode_reward = float(final_reward)
+        env.last_episode_steps = int(steps)
+    except Exception:
+        pass
+
+    if not owns_env:
+        print(
+            f"Environment CLOSE (reason={termination_reason}, reward={final_reward:.2f}, steps={steps})"
+        )
+    else:
+        env.close()
     return episode_stats
 
 def rollout_mean(
@@ -458,27 +650,48 @@ def rollout_mean(
     collision_penalty: Optional[float],
     workers: int = 0,
     base_seed: int = 0,
+    verbose: bool = False,
+    reuse_env: bool = True,
 ) -> Tuple[float, Dict[str, float]]:
     # Evaluate mean episode reward with optional multiprocessing
-    if episodes <= 1 or workers <= 0:
-        ep_stats = [
-            rollout_once(params_vec, max_steps, domain_randomize, collision_penalty, seed=base_seed + i)
-            for i in range(episodes)
-        ]
-    else:
-        with futures.ProcessPoolExecutor(max_workers=workers) as ex:
-            tasks = [
-                ex.submit(
-                    rollout_once,
-                    params_vec.copy(),
-                    max_steps,
-                    domain_randomize,
-                    collision_penalty,
-                    base_seed + i,
+    ep_stats: List[EpisodeStats] = []
+    reuse_env_flag = reuse_env and not domain_randomize and (workers <= 0) and episodes > 0
+    shared_env: Optional[DrpEnv] = make_env() if reuse_env_flag else None
+
+    try:
+        if episodes <= 1 or workers <= 0:
+            for i in range(episodes):
+                env_inst = shared_env if shared_env is not None else None
+                ep_stats.append(
+                    rollout_once(
+                        params_vec,
+                        max_steps,
+                        domain_randomize,
+                        collision_penalty,
+                        seed=base_seed + i,
+                        env=env_inst,
+                        verbose=verbose,
+                    )
                 )
-                for i in range(episodes)
-            ]
-            ep_stats = [t.result() for t in tasks]
+        else:
+            with futures.ProcessPoolExecutor(max_workers=workers) as ex:
+                tasks = [
+                    ex.submit(
+                        rollout_once,
+                        params_vec.copy(),
+                        max_steps,
+                        domain_randomize,
+                        collision_penalty,
+                        base_seed + i,
+                        None,
+                        verbose,
+                    )
+                    for i in range(episodes)
+                ]
+                ep_stats = [t.result() for t in tasks]
+    finally:
+        if shared_env is not None:
+            shared_env.close()
 
     rewards = np.asarray([s.reward for s in ep_stats], dtype=np.float32)
     mean_reward = float(np.mean(rewards)) if rewards.size else 0.0
@@ -581,6 +794,8 @@ def _evaluate_candidate_worker(payload: dict) -> Tuple[float, Dict[str, float]]:
     collision_penalty = payload.get("collision_penalty")
     workers = int(payload.get("workers", 0) or 0)
     base_seed = int(payload.get("base_seed", 0))
+    verbose = bool(payload.get("verbose", False))
+    reuse_env = bool(payload.get("reuse_env", True))
     return rollout_mean(
         params_vec,
         episodes=episodes,
@@ -589,6 +804,8 @@ def _evaluate_candidate_worker(payload: dict) -> Tuple[float, Dict[str, float]]:
         collision_penalty=collision_penalty,
         workers=workers,
         base_seed=base_seed,
+        verbose=verbose,
+        reuse_env=reuse_env,
     )
 
 def train_priority_params_gpu(
@@ -612,6 +829,9 @@ def train_priority_params_gpu(
     workers: int = 0,  # number of CPU processes for per-candidate episode rollouts
     candidate_workers: int = 0,  # process pool for evaluating distinct ES candidates
     device_override: Optional[str] = None,
+    verbose: bool = False,
+    reuse_env: bool = True,
+    resume_from_log: bool = False,
 ) -> Tuple[PriorityParams, float, List[float], List[float], str, Dict[str, float]]:
     # Select device
     device = _resolve_device(device_override)
@@ -622,30 +842,98 @@ def train_priority_params_gpu(
 
     # Initialize vector from saved params
     mean_vec_np = params_to_vector(get_priority_params()).astype(np.float32)
+    start_iteration = 1
+    total_completed_iters = 0
+    remaining_iterations = iterations
+    resume_state = None
+    resume_metrics: Dict[str, float] = {}
+    if resume_from_log and log_csv:
+        resume_state = _load_resume_state(log_csv)
+        if resume_state is not None:
+            resume_vec, resume_iter, resume_metrics = resume_state
+            if resume_vec.size != mean_vec_np.size:
+                adjusted = mean_vec_np.copy()
+                take = min(adjusted.size, resume_vec.size)
+                if take > 0:
+                    adjusted[:take] = resume_vec[:take]
+                resume_vec = adjusted
+                if resume_vec.size < mean_vec_np.size:
+                    # already padded with existing defaults
+                    pass
+                print(
+                    f"[RESUME] Adjusted parameter vector dimensions (log dim={resume_state[0].size} -> current dim={mean_vec_np.size})."
+                )
+            mean_vec_np = resume_vec.astype(np.float32)
+            start_iteration = max(1, int(resume_iter))
+            total_completed_iters = max(start_iteration - 1, 0)
+            if total_completed_iters >= iterations:
+                remaining_iterations = 0
+                print(
+                    f"[RESUME] Existing log already has {total_completed_iters} iterations (>= requested {iterations}); skipping updates."
+                )
+            else:
+                remaining_iterations = iterations - total_completed_iters
+                print(
+                    f"[RESUME] Loaded iteration {total_completed_iters} state from {log_csv}; scheduling {remaining_iterations} additional iterations."
+                )
+        else:
+            print(f"[RESUME] No usable state found in {log_csv}; starting fresh.")
+
     dim = mean_vec_np.size
     mean_vec = torch.tensor(mean_vec_np, device=device)
 
-    # Baseline reward
-    base_mean, base_metrics = rollout_mean(
-        mean_vec.detach().cpu().numpy(),
-        episodes=episodes_per_candidate,
-        max_steps=max_steps,
-        domain_randomize=domain_randomize,
-        collision_penalty=collision_penalty,
-        workers=workers,
-        base_seed=seed * 1000 + 1,
-    )
+    skip_training = remaining_iterations <= 0
+
+    assigned_candidate_workers = int(candidate_workers or 0)
+    if assigned_candidate_workers < 0:
+        assigned_candidate_workers = max(os.cpu_count() or 1, 1)
+
+    def _effective_episode_workers() -> int:
+        if workers and workers > 0:
+            return int(workers)
+        if assigned_candidate_workers > 0:
+            return assigned_candidate_workers
+        return 0
+
+    if not skip_training:
+        base_mean, base_metrics = rollout_mean(
+            mean_vec.detach().cpu().numpy(),
+            episodes=episodes_per_candidate,
+            max_steps=max_steps,
+            domain_randomize=domain_randomize,
+            collision_penalty=collision_penalty,
+            workers=_effective_episode_workers(),
+            base_seed=seed * 1000 + 1,
+            verbose=verbose,
+            reuse_env=reuse_env,
+        )
+    else:
+        def _resume_value(key: str) -> float:
+            val = resume_metrics.get(key)
+            if val is None:
+                return float("nan")
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                return float("nan")
+
+        base_mean = _resume_value("reward_mean")
+        base_metrics = {
+            "goal_rate": _resume_value("best_goal_rate"),
+            "collision_rate": _resume_value("best_collision_rate"),
+            "timeup_rate": _resume_value("best_timeup_rate"),
+            "avg_steps": _resume_value("best_avg_steps"),
+            "avg_task_completion": _resume_value("best_avg_task_completion"),
+        }
+
     best_reward = float(base_mean)
     best_vector = mean_vec.detach().clone()
     hist_means: List[float] = []
     hist_collision_rates: List[float] = []
     best_reward_ema = float(best_reward)
 
-    assigned_candidate_workers = int(candidate_workers or 0)
-    if assigned_candidate_workers < 0:
-        assigned_candidate_workers = max(os.cpu_count() or 1, 1)
     candidate_pool: Optional[futures.ProcessPoolExecutor] = None
-    if assigned_candidate_workers > 0:
+    if assigned_candidate_workers > 0 and not skip_training:
         candidate_pool = futures.ProcessPoolExecutor(max_workers=assigned_candidate_workers)
         if workers and workers > 0:
             print(
@@ -700,81 +988,84 @@ def train_priority_params_gpu(
             pass
 
     try:
-        for it in range(1, iterations + 1):
-            # Noise: (population, dim) on device
-            noise = torch.randn((population, dim), device=device, dtype=mean_vec.dtype)
-            candidates = mean_vec.unsqueeze(0) + sigma * noise
+        if not skip_training:
+            for it in range(start_iteration, start_iteration + remaining_iterations):
+                # Noise: (population, dim) on device
+                noise = torch.randn((population, dim), device=device, dtype=mean_vec.dtype)
+                candidates = mean_vec.unsqueeze(0) + sigma * noise
 
-            # Evaluate rewards for each candidate (CPU env). We must move vectors to CPU numpy
-            candidate_payloads = []
-            for idx in range(population):
-                vec_np = candidates[idx].detach().cpu().numpy()
-                candidate_payloads.append(
-                    {
-                        "params_vec": vec_np,
-                        "episodes": episodes_per_candidate,
-                        "max_steps": max_steps,
-                        "domain_randomize": domain_randomize,
-                        "collision_penalty": collision_penalty,
-                        "workers": workers,
-                        "base_seed": seed * 100000 + it * 1000 + idx,
-                    }
+                # Evaluate rewards for each candidate (CPU env). We must move vectors to CPU numpy
+                candidate_payloads = []
+                for idx in range(population):
+                    vec_np = candidates[idx].detach().cpu().numpy()
+                    candidate_payloads.append(
+                        {
+                            "params_vec": vec_np,
+                            "episodes": episodes_per_candidate,
+                            "max_steps": max_steps,
+                            "domain_randomize": domain_randomize,
+                            "collision_penalty": collision_penalty,
+                            "workers": workers,
+                            "base_seed": seed * 100000 + it * 1000 + idx,
+                            "verbose": verbose,
+                            "reuse_env": reuse_env,
+                        }
+                    )
+
+                candidate_results: List[Tuple[float, Dict[str, float]]] = []
+                if candidate_pool is not None:
+                    futures_list = [candidate_pool.submit(_evaluate_candidate_worker, payload) for payload in candidate_payloads]
+                    for fut in futures_list:
+                        candidate_results.append(fut.result())
+                else:
+                    for payload in candidate_payloads:
+                        candidate_results.append(_evaluate_candidate_worker(payload))
+
+                rewards = [res[0] for res in candidate_results]
+                candidate_metrics = [res[1] for res in candidate_results]
+                rewards_np = np.asarray(rewards, dtype=np.float32)
+
+                # ES update on GPU
+                r_mean = float(rewards_np.mean())
+                r_std = float(rewards_np.std())
+                r_max = float(rewards_np.max())
+                rewards_t = torch.tensor(rewards_np, device=device, dtype=mean_vec.dtype)
+                normalized = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
+                step = (lr / (population * sigma)) * (noise.transpose(0, 1) @ normalized)  # (dim,)
+                if clip_step_norm and clip_step_norm > 0.0:
+                    step_norm = float(torch.linalg.vector_norm(step).item())
+                    if step_norm > clip_step_norm:
+                        step = step * (clip_step_norm / (step_norm + 1e-8))
+                new_mean_vec = mean_vec + step
+                mean_vec = new_mean_vec
+
+                # Best tracking (configurable)
+                best_idx = int(np.argmax(rewards_np))
+                current_best = float(rewards_np[best_idx])
+                best_reward_ema = (best_update_alpha * r_mean) + ((1.0 - best_update_alpha) * best_reward_ema)
+                if best_update_mode == "mean_gap":
+                    threshold = r_mean + best_update_gap
+                elif best_update_mode == "moving_avg":
+                    threshold = best_reward_ema + best_update_gap
+                else:
+                    threshold = best_reward
+                if current_best > threshold:
+                    best_reward = current_best
+                    best_vector = candidates[best_idx].detach().clone()
+
+                # Log and history
+                best_metrics = candidate_metrics[best_idx] if candidate_metrics else {}
+
+                _log_iter(
+                    it,
+                    r_mean,
+                    r_std,
+                    r_max,
+                    mean_vec.detach().cpu().numpy(),
+                    metrics=best_metrics,
                 )
-
-            candidate_results: List[Tuple[float, Dict[str, float]]] = []
-            if candidate_pool is not None:
-                futures_list = [candidate_pool.submit(_evaluate_candidate_worker, payload) for payload in candidate_payloads]
-                for fut in futures_list:
-                    candidate_results.append(fut.result())
-            else:
-                for payload in candidate_payloads:
-                    candidate_results.append(_evaluate_candidate_worker(payload))
-
-            rewards = [res[0] for res in candidate_results]
-            candidate_metrics = [res[1] for res in candidate_results]
-            rewards_np = np.asarray(rewards, dtype=np.float32)
-
-            # ES update on GPU
-            r_mean = float(rewards_np.mean())
-            r_std = float(rewards_np.std())
-            r_max = float(rewards_np.max())
-            rewards_t = torch.tensor(rewards_np, device=device, dtype=mean_vec.dtype)
-            normalized = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
-            step = (lr / (population * sigma)) * (noise.transpose(0, 1) @ normalized)  # (dim,)
-            if clip_step_norm and clip_step_norm > 0.0:
-                step_norm = float(torch.linalg.vector_norm(step).item())
-                if step_norm > clip_step_norm:
-                    step = step * (clip_step_norm / (step_norm + 1e-8))
-            new_mean_vec = mean_vec + step
-            mean_vec = new_mean_vec
-
-            # Best tracking (configurable)
-            best_idx = int(np.argmax(rewards_np))
-            current_best = float(rewards_np[best_idx])
-            best_reward_ema = (best_update_alpha * r_mean) + ((1.0 - best_update_alpha) * best_reward_ema)
-            if best_update_mode == "mean_gap":
-                threshold = r_mean + best_update_gap
-            elif best_update_mode == "moving_avg":
-                threshold = best_reward_ema + best_update_gap
-            else:
-                threshold = best_reward
-            if current_best > threshold:
-                best_reward = current_best
-                best_vector = candidates[best_idx].detach().clone()
-
-            # Log and history
-            best_metrics = candidate_metrics[best_idx] if candidate_metrics else {}
-
-            _log_iter(
-                it,
-                r_mean,
-                r_std,
-                r_max,
-                mean_vec.detach().cpu().numpy(),
-                metrics=best_metrics,
-            )
-            hist_means.append(r_mean)
-            hist_collision_rates.append(float(best_metrics.get("collision_rate", float("nan"))))
+                hist_means.append(r_mean)
+                hist_collision_rates.append(float(best_metrics.get("collision_rate", float("nan"))))
     finally:
         if candidate_pool is not None:
             candidate_pool.shutdown(wait=True)
@@ -789,15 +1080,27 @@ def train_priority_params_gpu(
     save_priority_params(best_params)
 
     # Final eval
-    final_score, final_stats = rollout_mean(
-        params_to_vector(best_params),
-        episodes=eval_episodes,
-        max_steps=max_steps,
-        domain_randomize=domain_randomize,
-        collision_penalty=collision_penalty,
-        workers=workers,
-        base_seed=seed * 999999 + 4242,
-    )
+    if skip_training:
+        final_score = _resume_value("reward_mean")
+        final_stats = {
+            "goal_rate": _resume_value("best_goal_rate"),
+            "collision_rate": _resume_value("best_collision_rate"),
+            "timeup_rate": _resume_value("best_timeup_rate"),
+            "avg_steps": _resume_value("best_avg_steps"),
+            "avg_task_completion": _resume_value("best_avg_task_completion"),
+        }
+    else:
+        final_score, final_stats = rollout_mean(
+            params_to_vector(best_params),
+            episodes=eval_episodes,
+            max_steps=max_steps,
+            domain_randomize=domain_randomize,
+            collision_penalty=collision_penalty,
+            workers=_effective_episode_workers(),
+            base_seed=seed * 999999 + 4242,
+            verbose=verbose,
+            reuse_env=reuse_env,
+        )
     # Optionally save best params and metadata to JSON
     if save_params_json:
         try:
@@ -809,7 +1112,8 @@ def train_priority_params_gpu(
         except Exception:
             pass
 
-    _save_learning_curve(hist_means, hist_collision_rates, plot_png)
+    if not skip_training:
+        _save_learning_curve(hist_means, hist_collision_rates, plot_png)
     return best_params, float(final_score), hist_means, hist_collision_rates, device.type, final_stats
 
 def main():
@@ -857,6 +1161,16 @@ def main():
         help="Process pool size for concurrent ES candidate evaluations (CPU). Use a negative value to auto-set to CPU count.",
     )
     parser.add_argument(
+        "--verbose-episodes",
+        action="store_true",
+        help="Print per-episode rollout stats (debugging aid, slows training).",
+    )
+    parser.add_argument(
+        "--disable-env-reuse",
+        action="store_true",
+        help="Recreate environments for every episode instead of reusing a reset instance.",
+    )
+    parser.add_argument(
         "--sweep-workers",
         type=int,
         default=0,
@@ -882,6 +1196,11 @@ def main():
         default="policy/train/sweep_results",
         help="Directory to store JSON parameter files and logs when --sweep is enabled.",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume training from the last parameter vector recorded in the specified --log-csv file.",
+    )
     args = parser.parse_args()
 
     device_list = _parse_device_list(args.gpu_devices)
@@ -889,6 +1208,8 @@ def main():
     if candidate_workers < 0:
         candidate_workers = max(os.cpu_count() or 1, 1)
     sweep_plot_dir = Path(args.sweep_plot_dir).resolve() if args.sweep_plot_dir else None
+
+    resume_flag = bool(args.resume)
 
     # Apply ENV overrides
     overrides = {}
@@ -910,7 +1231,11 @@ def main():
             print("[SWEEP] Ignoring --map-name/--agent-num because --sweep controls these values.")
     if overrides:
         ENV_CONFIG.update(overrides)
-        ENV_CONFIG["time_limit"] = _compute_time_limit(ENV_CONFIG.get("agent_num"))
+        ENV_CONFIG["time_limit"] = _compute_time_limit(
+            ENV_CONFIG.get("agent_num"),
+            ENV_CONFIG.get("map_name"),
+            ENV_CONFIG.get("speed"),
+        )
 
     # interpret collision_penalty (allow 'none' to disable overwrite and use per-step rewards)
     cp_arg = args.collision_penalty
@@ -950,6 +1275,9 @@ def main():
         workers=args.workers,
         candidate_workers=candidate_workers,
         device_override=device_override,
+        verbose=args.verbose_episodes,
+        reuse_env=not args.disable_env_reuse,
+        resume_from_log=resume_flag,
     )
 
     print("==== Final evaluation (GPU ES) ====")
@@ -1000,7 +1328,11 @@ def run_sweep(
                 "map_name": map_name,
                 "agent_num": agent_num,
             })
-            run_config["time_limit"] = _compute_time_limit(run_config.get("agent_num"))
+            run_config["time_limit"] = _compute_time_limit(
+                run_config.get("agent_num"),
+                run_config.get("map_name"),
+                run_config.get("speed"),
+            )
 
             json_path = output_dir / f"priority_params_{map_name}_agents_{agent_num}.json"
             log_csv_path = logs_dir / f"train_log_{map_name}_agents_{agent_num}.csv"
@@ -1029,6 +1361,9 @@ def run_sweep(
                 max_steps=args.max_steps,
                 workers=args.workers,
                 candidate_workers=candidate_workers,
+                verbose=args.verbose_episodes,
+                reuse_env=not args.disable_env_reuse,
+                resume_from_log=bool(args.resume),
             )
 
             summary_entry = {
@@ -1068,6 +1403,8 @@ def run_sweep(
     if sweep_workers <= 1:
         try:
             for idx, task in enumerate(tasks):
+                # Reset learned parameters before each sweep job so runs don't leak state
+                set_priority_params(PriorityParams())
                 ENV_CONFIG.clear()
                 ENV_CONFIG.update(task["run_config"])
                 trainer_kwargs = dict(task["trainer_kwargs"])
@@ -1127,6 +1464,7 @@ def _run_sweep_job(payload: dict) -> dict:
     device_override = payload.get("device_override")
 
     try:
+        set_priority_params(PriorityParams())
         ENV_CONFIG.clear()
         ENV_CONFIG.update(run_config)
         trainer_kwargs["device_override"] = device_override

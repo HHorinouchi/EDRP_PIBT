@@ -7,11 +7,11 @@ from policy.my_policy import policy
 
 total_task_completed = 0
 total_collision_ended = 0
-loopnum = 10
+loopnum = 100
 total_steps = 300
 max_count = 0
 for i in range(0, loopnum):
-    env=gym.make("drp_env:drp-12agent_map_5x4-v2", state_repre_flag = "onehot_fov", task_flag = True)
+    env=gym.make("drp_env:drp-5agent_map_5x4-v2", state_repre_flag = "onehot_fov", task_flag = True)
     n_obs=env.reset()
     print("action_space", env.action_space)
     print("observation_space", env.observation_space)

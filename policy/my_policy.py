@@ -40,11 +40,7 @@ class PriorityParams:
     assign_pick_weight: float = 1.0
     assign_drop_weight: float = 1.0
     assign_idle_bias: float = -1.0  # これは、可能な行動数にかけるパラメータ
-
-    # Global/system-level weights
     congestion_weight: float = -1.0  # penalize local congestion around an agent
-    load_balance_weight: float = 0.0  # bias assignment based on system unassigned ratio
-
     @classmethod
     def from_dict(cls, data: Dict) -> "PriorityParams":
         return cls(
@@ -58,15 +54,16 @@ class PriorityParams:
             else None,
             assign_pick_weight=float(data.get("assign_pick_weight", cls.assign_pick_weight)),
             assign_drop_weight=float(data.get("assign_drop_weight", cls.assign_drop_weight)),
-            assign_idle_bias=float(data.get("assign_idle_bias", cls.assign_idle_bias)),
             congestion_weight=float(data.get("congestion_weight", cls.congestion_weight)),
-            load_balance_weight=float(data.get("load_balance_weight", cls.load_balance_weight)),
         )
 
 
 _PRIORITY_PARAMS_PATH = Path(__file__).with_name("priority_params_shibuya_10.json")
 _PRIORITY_PARAMS = None
 _PRIORITY_PARAMS_LOADED_FROM_FILE = False
+
+DEFAULT_ASSIGN_IDLE_BIAS = -1.0
+DEFAULT_LOAD_BALANCE_WEIGHT = 0.0
 
 
 def _load_priority_params() -> PriorityParams:
@@ -201,8 +198,8 @@ def assign_task(env):
             score = (
                 params.assign_pick_weight * float(dist_to_pick)
                 + params.assign_drop_weight * float(dist_pick_to_drop)
-                + params.assign_idle_bias
-                + params.load_balance_weight * float(unassigned_ratio)
+                + DEFAULT_ASSIGN_IDLE_BIAS
+                + DEFAULT_LOAD_BALANCE_WEIGHT * float(unassigned_ratio)
             )
 
             if score < best_score:
@@ -484,7 +481,7 @@ def calculate_steps_to_node(env, agent_idx, target_node):
 def _default_step_tolerance(speed: float) -> float:
     if speed <= 0:
         return float("inf")
-    return max(1, math.ceil(5.0 / speed)) * 2 + 1
+    return max(1, math.ceil(5.0 / speed))+ 1
 
 
 def _resolve_step_tolerance(env, params: PriorityParams, speed: float) -> float:
