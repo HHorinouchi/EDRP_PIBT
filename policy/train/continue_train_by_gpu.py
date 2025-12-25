@@ -1024,6 +1024,10 @@ def train_priority_params_gpu(
                 rewards = [res[0] for res in candidate_results]
                 candidate_metrics = [res[1] for res in candidate_results]
                 rewards_np = np.asarray(rewards, dtype=np.float32)
+                collision_rates = [
+                    float(metrics.get("collision_rate", 0.0)) for metrics in candidate_metrics if metrics
+                ]
+                mean_collision_rate = float(np.mean(collision_rates)) if collision_rates else float("nan")
 
                 # ES update on GPU
                 r_mean = float(rewards_np.mean())
@@ -1036,6 +1040,9 @@ def train_priority_params_gpu(
                     step_norm = float(torch.linalg.vector_norm(step).item())
                     if step_norm > clip_step_norm:
                         step = step * (clip_step_norm / (step_norm + 1e-8))
+                # If collisions are frequent, force step_tolerance updates to move positively.
+                if dim > 8 and np.isfinite(mean_collision_rate) and mean_collision_rate > 0.5:
+                    step[8] = step[8].abs()
                 new_mean_vec = mean_vec + step
                 mean_vec = new_mean_vec
 
