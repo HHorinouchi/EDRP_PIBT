@@ -856,9 +856,13 @@ def train_priority_params_gpu(
 
     try:
         if not skip_training:
+            force_positive_v8 = False
             for it in range(start_iteration, start_iteration + remaining_iterations):
                 # Noise: (population, dim) on device
                 noise = torch.randn((population, dim), device=device, dtype=mean_vec.dtype)
+                if force_positive_v8 and dim > 8:
+                    # Bias v8 perturbations upward when the previous iteration had heavy collisions.
+                    noise[:, 8] = noise[:, 8].abs()
                 candidates = mean_vec.unsqueeze(0) + sigma * noise
 
                 # Evaluate rewards for each candidate (CPU env). We must move vectors to CPU numpy
@@ -912,9 +916,10 @@ def train_priority_params_gpu(
                     step_norm = float(torch.linalg.vector_norm(step).item())
                     if step_norm > clip_step_norm:
                         step = step * (clip_step_norm / (step_norm + 1e-8))
-                if dim > 8 and collision_rate_best > 0.5 and step[8] < 0:
+                need_positive_v8 = dim > 8 and collision_rate_best > 0.5
+                if need_positive_v8:
                     step = step.clone()
-                    step[8] = 0.0
+                    step[8] = step[8].abs()
                 new_mean_vec = mean_vec + step
                 mean_vec = new_mean_vec
 
@@ -941,7 +946,8 @@ def train_priority_params_gpu(
                     metrics=best_metrics,
                 )
                 hist_means.append(r_mean)
-                hist_collision_rates.append(float(best_metrics.get("collision_rate", float("nan"))))
+                hist_collision_rates.append(collision_rate_best)
+                force_positive_v8 = need_positive_v8
     finally:
         if candidate_pool is not None:
             candidate_pool.shutdown(wait=True)
