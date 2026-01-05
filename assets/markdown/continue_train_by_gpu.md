@@ -70,7 +70,7 @@ python policy/train/continue_train_by_gpu.py \
 ```bash
 python policy/train/continue_train_by_gpu.py \
   --sweep \
-  --iterations 300 \
+  --iterations 150 \
   --population 32 \
   --episodes-per-candidate 20 \
   --eval-episodes 20 \

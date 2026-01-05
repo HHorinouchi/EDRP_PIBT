@@ -1041,7 +1041,7 @@ def train_priority_params_gpu(
                     if step_norm > clip_step_norm:
                         step = step * (clip_step_norm / (step_norm + 1e-8))
                 # If collisions are frequent, force step_tolerance updates to move positively.
-                if dim > 8 and np.isfinite(mean_collision_rate) and mean_collision_rate > 0.5:
+                if dim > 8 and np.isfinite(mean_collision_rate) and mean_collision_rate > 0.25:
                     step[8] = step[8].abs()
                 new_mean_vec = mean_vec + step
                 mean_vec = new_mean_vec
