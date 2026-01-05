@@ -227,7 +227,7 @@ def _make_env_config(map_name: str, agent_num: int) -> dict:
     return _normalized_env_config(cfg)
 
 
-def _run_episode(env_config: dict, step_limit: Optional[int]) -> float:
+def _run_episode(env_config: dict, step_limit: Optional[int], param_name: Optional[str] = None, delta: Optional[float] = None) -> float:
     env = DrpEnv(**_normalized_env_config(env_config))
     obs = env.reset()
     done_flags = [False for _ in range(env.agent_num)]
@@ -278,6 +278,32 @@ def _run_episode(env_config: dict, step_limit: Optional[int]) -> float:
     elif timeup_triggered:
         penalty_term = (r_coll * speed)
 
+    termination_reason = "unknown"
+    if last_info.get("collision", False):
+        termination_reason = "collision"
+    elif last_info.get("goal", False):
+        termination_reason = "task_completed"
+    elif timeup_triggered or steps >= max_steps:
+        termination_reason = "time_up"
+
+    try:
+        env.last_info = dict(last_info)
+        env.last_episode_reward = float(goal_reward + step_penalty + penalty_term)
+        env.last_episode_steps = int(steps)
+        env.last_termination_reason = termination_reason
+    except Exception:
+        pass
+
+    try:
+        env.last_info = dict(last_info)
+        env.last_episode_reward = float(goal_reward + step_penalty + penalty_term)
+        env.last_episode_steps = int(steps)
+        env.last_termination_reason = termination_reason
+        env.last_param_name = param_name
+        env.last_param_delta = None if delta is None else float(delta)
+    except Exception:
+        pass
+
     env.close()
     return float(goal_reward + step_penalty + penalty_term)
 
@@ -288,13 +314,15 @@ def _evaluate_params(
     episodes: int,
     max_steps: Optional[int],
     seed: int,
+    param_name: Optional[str],
+    delta: Optional[float],
 ) -> float:
     params = PriorityParams.from_dict(params_dict)
     set_priority_params(params)
     rewards = []
     for i in range(episodes):
         np.random.seed(seed + i)
-        rewards.append(_run_episode(env_config, max_steps))
+    rewards.append(_run_episode(env_config, max_steps, param_name=param_name, delta=delta))
     return float(np.mean(rewards)) if rewards else 0.0
 
 
@@ -306,7 +334,7 @@ def _evaluate_worker(payload: dict) -> Tuple[str, float, float]:
     seed = payload["seed"]
     param_name = payload["param_name"]
     delta = payload["delta"]
-    mean_reward = _evaluate_params(env_config, params_dict, episodes, max_steps, seed)
+    mean_reward = _evaluate_params(env_config, params_dict, episodes, max_steps, seed, param_name, delta)
     return param_name, delta, mean_reward
 
 
@@ -317,7 +345,7 @@ def _iter_log_files(log_dir: Path) -> Iterable[Path]:
 
 
 def _parse_env_from_log_name(path: Path) -> Tuple[str, int]:
-    match = re.match(r"train_log_(.+)_agents_(\\d+)\\.csv", path.name)
+    match = re.match(r"train_log_(.+)_agents_(\d+)\.csv", path.name)
     if not match:
         raise ValueError(f"Unexpected log filename: {path.name}")
     map_name = match.group(1)

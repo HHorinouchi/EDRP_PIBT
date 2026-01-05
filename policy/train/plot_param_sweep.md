@@ -31,6 +31,16 @@
 python policy/train/plot_param_sweep.py --episodes 100 --workers 8
 ```
 
+推奨コマンド例（出力ディレクトリを明示）:
+
+```bash
+python policy/train/plot_param_sweep.py \
+  --logs-dir policy/train/sweep_results/logs \
+  --output-dir policy/train/sweep_results/param_sweep \
+  --episodes 100 \
+  --workers 32
+```
+
 ### 主なオプション
 
 - `--logs-dir`  
@@ -47,6 +57,8 @@ python policy/train/plot_param_sweep.py --episodes 100 --workers 8
 
 - `--max-steps`  
   各エピソードの最大ステップ数（`0` で未指定、環境の time_limit に従う）
+  ※ time_limit は `continue_train_by_gpu.py` と同じくマップのノード座標から幅・高さを取得し、
+    `(幅 + 高さ) * 6 / speed` を上限として計算した値が自動的に設定される。
 
 - `--seed`  
   乱数シード（デフォルト: `0`）

@@ -547,7 +547,18 @@ class DrpEnv(gym.Env):
 				steps_str = str(int(steps_val))
 			except Exception:
 				steps_str = "unknown"
-		print(f"Environment CLOSE (reason={reason}, reward={reward_str}, steps={steps_str})")
+		param_name = getattr(self, "last_param_name", None)
+		param_delta = getattr(self, "last_param_delta", None)
+		if param_name is not None and param_delta is not None:
+			try:
+				delta_str = f"{float(param_delta):+.3f}"
+			except Exception:
+				delta_str = str(param_delta)
+			print(
+				f"Environment CLOSE (reason={reason}, reward={reward_str}, steps={steps_str}, param={param_name}, delta={delta_str})"
+			)
+		else:
+			print(f"Environment CLOSE (reason={reason}, reward={reward_str}, steps={steps_str})")
 		return None
     
 	def get_pos_list(self):
