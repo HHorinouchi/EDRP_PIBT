@@ -394,7 +394,7 @@ def main() -> None:
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    delta_values = np.arange(-2.5, 2.5, 0.1, dtype=np.float32).tolist()
+    delta_values = np.arange(-3.0, 3.0, 0.1, dtype=np.float32).tolist()
     max_steps = args.max_steps if args.max_steps > 0 else None
 
     if not log_dir.exists():

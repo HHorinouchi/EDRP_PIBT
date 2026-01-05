@@ -19,7 +19,7 @@
 
 1. `policy/train/sweep_results/logs` のログ CSV を列挙
 2. `priority_params_<map>_agents_<n>.json` を最善パラメータとして取得
-3. 各パラメータを 1 つずつ `±2.5`（0.1 刻み）でスイープ
+3. 各パラメータを 1 つずつ `±3.0`（0.1 刻み）でスイープ
 4. 各点について 100 エピソードの平均報酬を算出
 5. パラメータごとの報酬曲線をプロットし、PNG/CSV/JSON を保存
 
@@ -37,7 +37,7 @@ python policy/train/plot_param_sweep.py --episodes 100 --workers 8
 python policy/train/plot_param_sweep.py \
   --logs-dir policy/train/sweep_results/logs \
   --output-dir policy/train/sweep_results/param_sweep \
-  --episodes 100 \
+  --episodes 1000 \
   --workers 32
 ```
 
