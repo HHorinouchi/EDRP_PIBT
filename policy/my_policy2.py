@@ -329,7 +329,7 @@ def detect_actions(env):
 
     count = 0
     
-    while current_priority < env.agent_num and count < 100:
+    while current_priority < env.agent_num:
         # count += 1
         # if count > 10000:
         #     # 無限ループ防止

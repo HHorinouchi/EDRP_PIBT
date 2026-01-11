@@ -53,7 +53,14 @@ class PriorityParams:
         )
 
 
-_PRIORITY_PARAMS_PATH = Path(__file__).with_name("priority_params_shibuya_10.json")
+ROOT_DIR = Path(__file__).resolve().parents[1]
+_PRIORITY_PARAMS_PATH = (
+    ROOT_DIR
+    / "policy"
+    / "train"
+    / "sweep_results"
+    / "priority_params_map_5x4_agents_10.json"
+)
 _PRIORITY_PARAMS = None
 _PRIORITY_PARAMS_LOADED_FROM_FILE = False
 
