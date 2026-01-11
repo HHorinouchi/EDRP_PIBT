@@ -24,37 +24,32 @@ class PriorityParams:
     goal_weight:     Weight for distance to drop when currently heading to drop.
     pick_weight:     Weight for distance to pick when still before pickup.
     drop_weight:     Weight for distance pick->drop when still before pickup.
-    idle_bias:       Additive bias applied only when the agent has no task.
-    idle_penalty:    Base score given to agents with no task (keeps them last).
     step_tolerance:  Collision timing tolerance (None uses speed-based default).
     """
 
     goal_weight: float = 1.0
     pick_weight: float = 1.0
     drop_weight: float = 1.0
-    idle_bias: float = 1.0
-    idle_penalty: float = 1000.0
     step_tolerance: Optional[float] = None
 
     # Task assignment scoring weights
     assign_pick_weight: float = 1.0
     assign_drop_weight: float = 1.0
-    assign_idle_bias: float = -1.0  # これは、可能な行動数にかけるパラメータ
     congestion_weight: float = -1.0  # penalize local congestion around an agent
+    assign_spread_weight: float = 1.0  # penalize assignment to nearby drop nodes
     @classmethod
     def from_dict(cls, data: Dict) -> "PriorityParams":
         return cls(
             goal_weight=float(data.get("goal_weight", cls.goal_weight)),
             pick_weight=float(data.get("pick_weight", cls.pick_weight)),
             drop_weight=float(data.get("drop_weight", cls.drop_weight)),
-            idle_bias=float(data.get("idle_bias", cls.idle_bias)),
-            idle_penalty=float(data.get("idle_penalty", cls.idle_penalty)),
             step_tolerance=float(data.get("step_tolerance", cls.step_tolerance))
             if data.get("step_tolerance", cls.step_tolerance) is not None
             else None,
             assign_pick_weight=float(data.get("assign_pick_weight", cls.assign_pick_weight)),
             assign_drop_weight=float(data.get("assign_drop_weight", cls.assign_drop_weight)),
             congestion_weight=float(data.get("congestion_weight", cls.congestion_weight)),
+            assign_spread_weight=float(data.get("assign_spread_weight", cls.assign_spread_weight)),
         )
 
 
@@ -62,7 +57,6 @@ _PRIORITY_PARAMS_PATH = Path(__file__).with_name("priority_params_shibuya_10.jso
 _PRIORITY_PARAMS = None
 _PRIORITY_PARAMS_LOADED_FROM_FILE = False
 
-DEFAULT_ASSIGN_IDLE_BIAS = -1.0
 DEFAULT_LOAD_BALANCE_WEIGHT = 0.0
 
 
@@ -158,6 +152,19 @@ def assign_task(env):
     unassigned_cnt = sum(1 for a in env.assigned_list if a == -1) if total_slots > 0 else 0
     unassigned_ratio = float(unassigned_cnt) / float(total_slots) if total_slots > 0 else 0.0
 
+    def _assigned_goal(idx: int) -> Optional[int]:
+        if idx < len(env.assigned_tasks) and len(env.assigned_tasks[idx]) >= 2:
+            return env.assigned_tasks[idx][1]
+        if idx < len(env.goal_array):
+            return env.goal_array[idx]
+        return None
+
+    other_targets = []
+    for j in range(env.agent_num):
+        target = _assigned_goal(j)
+        if target is not None:
+            other_targets.append(int(target))
+
     for i in range(env.agent_num):
         # skip if agent already has an assigned task
         if i < len(env.assigned_tasks) and len(env.assigned_tasks[i]) != 0:
@@ -195,11 +202,19 @@ def assign_task(env):
             if dist_pick_to_drop is None:
                 dist_pick_to_drop = float("inf")
 
+            spread_penalty = 0.0
+            if other_targets:
+                for target in other_targets:
+                    dist = env.get_path_length(drop_node, target)
+                    if dist is None:
+                        continue
+                    spread_penalty += 1.0 / (float(dist) + 1.0)
+
             score = (
                 params.assign_pick_weight * float(dist_to_pick)
                 + params.assign_drop_weight * float(dist_pick_to_drop)
-                + DEFAULT_ASSIGN_IDLE_BIAS
                 + DEFAULT_LOAD_BALANCE_WEIGHT * float(unassigned_ratio)
+                + params.assign_spread_weight * spread_penalty
             )
 
             if score < best_score:
@@ -562,7 +577,7 @@ def _priority_score(env, agent_idx: int, assigned_task: List[int]) -> float:
     _, avail_actions = env.get_avail_agent_actions(agent_idx, env.n_actions)
     avail_actions_num = len(avail_actions)
     if not has_task or len(assigned_task) < 2:
-        return params.idle_penalty + params.idle_bias * avail_actions_num
+        return params.congestion_weight * _agent_congestion(env, agent_idx)
 
     pick_node = assigned_task[0]
     drop_node = assigned_task[1]
@@ -578,4 +593,8 @@ def _priority_score(env, agent_idx: int, assigned_task: List[int]) -> float:
     dist_drop = env.get_path_length(pick_node, drop_node)
     dist_pick = dist_pick if dist_pick is not None else float("inf")
     dist_drop = dist_drop if dist_drop is not None else float("inf")
-    return params.pick_weight * dist_pick + params.drop_weight * dist_drop + params.idle_bias * avail_actions_num + params.congestion_weight * _agent_congestion(env, agent_idx)
+    return (
+        params.pick_weight * dist_pick
+        + params.drop_weight * dist_drop
+        + params.congestion_weight * _agent_congestion(env, agent_idx)
+    )

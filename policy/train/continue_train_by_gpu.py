@@ -416,24 +416,22 @@ def make_env_from_config(cfg: dict) -> DrpEnv:
 # 0: goal_weight
 # 1: pick_weight
 # 2: drop_weight
-# 3: idle_bias
-# 4: idle_penalty
-# 5: assign_pick_weight
-# 6: assign_drop_weight
-# 7: congestion_weight
-# 8: step_tolerance
+# 3: assign_pick_weight
+# 4: assign_drop_weight
+# 5: congestion_weight
+# 6: step_tolerance
+# 7: assign_spread_weight
 def params_to_vector(params: PriorityParams) -> np.ndarray:
     return np.array(
         [
             params.goal_weight,
             params.pick_weight,
             params.drop_weight,
-            params.idle_bias,
-            params.idle_penalty,
             params.assign_pick_weight,
             params.assign_drop_weight,
             params.congestion_weight,
             _current_step_tolerance_value(params),
+            float(getattr(params, "assign_spread_weight", 1.0)),
         ],
         dtype=np.float32,
     )
@@ -444,39 +442,37 @@ def vector_to_params(vec: np.ndarray) -> PriorityParams:
     # For fields not present in the learned vector, preserve the current in-memory params.
     raw = np.asarray(vec, dtype=np.float32)
     raw = np.where(np.isfinite(raw), raw, 0.0)
-    safe_len = 9
+    safe_len = 8
     z = np.zeros(safe_len, dtype=np.float32)
     z[: min(raw.size, safe_len)] = raw[: min(raw.size, safe_len)]
 
     current = get_priority_params()
-    idle_bias_default = float(getattr(current, "idle_bias", 0.0))
-    idle_penalty_default = float(getattr(current, "idle_penalty", 0.0))
-
     goal_w, pick_w, drop_w = np.clip(z[:3], 0.0, 10.0)
-    idle_bias = float(np.clip(z[3], -5000.0, 5000.0)) if raw.size >= 4 else idle_bias_default
-    idle_penalty = float(np.clip(z[4], 0.0, 5000.0)) if raw.size >= 5 else idle_penalty_default
-    assign_pick = float(np.clip(z[5], 0.0, 10.0)) if raw.size >= 6 else float(getattr(current, "assign_pick_weight", 0.0))
-    assign_drop = float(np.clip(z[6], 0.0, 10.0)) if raw.size >= 7 else float(getattr(current, "assign_drop_weight", 0.0))
-    congestion_w = float(np.clip(z[7], -10.0, 10.0)) if raw.size >= 8 else float(getattr(current, "congestion_weight", 0.0))
+    assign_pick = float(np.clip(z[3], 0.0, 10.0)) if raw.size >= 4 else float(getattr(current, "assign_pick_weight", 0.0))
+    assign_drop = float(np.clip(z[4], 0.0, 10.0)) if raw.size >= 5 else float(getattr(current, "assign_drop_weight", 0.0))
+    congestion_w = float(np.clip(z[5], -10.0, 10.0)) if raw.size >= 6 else float(getattr(current, "congestion_weight", 0.0))
 
     default_step_tol = _default_step_tolerance_for_speed(float(ENV_CONFIG.get("speed", 5.0) or 5.0))
-    if raw.size >= 9:
-        step_tolerance = float(np.clip(z[8], 0.0, 100.0))
+    if raw.size >= 7:
+        step_tolerance = float(np.clip(z[6], 0.0, 100.0))
     else:
         step_tolerance = _current_step_tolerance_value(current)
     if not np.isfinite(step_tolerance) or step_tolerance <= 0.0:
         step_tolerance = default_step_tol
+    if raw.size >= 8:
+        assign_spread_weight = float(np.clip(z[7], -10.0, 10.0))
+    else:
+        assign_spread_weight = float(getattr(current, "assign_spread_weight", 1.0))
 
     return PriorityParams(
         goal_weight=float(goal_w),
         pick_weight=float(pick_w),
         drop_weight=float(drop_w),
-        idle_bias=idle_bias,
-        idle_penalty=idle_penalty,
         assign_pick_weight=assign_pick,
         assign_drop_weight=assign_drop,
         congestion_weight=congestion_w,
         step_tolerance=step_tolerance,
+        assign_spread_weight=assign_spread_weight,
     )
 
 # Rollout (CPU env). Optionally end on collision and overwrite reward.

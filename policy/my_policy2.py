@@ -1,6 +1,9 @@
 import copy
+import json
 import math
 import random
+from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 import gym
@@ -12,24 +15,162 @@ TEAM_NAME = "your_team_name"
 # (or the team name if participating as a team).
 ##############################
 
+# priority_scoreは高いほうが優先度が低い
+@dataclass
+class PriorityParams:
+    """
+    Parameters for detect_actions priority calculation.
+
+    goal_weight:     Weight for distance to drop when currently heading to drop.
+    pick_weight:     Weight for distance to pick when still before pickup.
+    drop_weight:     Weight for distance pick->drop when still before pickup.
+    step_tolerance:  Collision timing tolerance (None uses speed-based default).
+    """
+
+    goal_weight: float = 1.0
+    pick_weight: float = 1.0
+    drop_weight: float = 1.0
+    step_tolerance: Optional[float] = None
+
+    # Task assignment scoring weights
+    assign_pick_weight: float = 1.0
+    assign_drop_weight: float = 1.0
+    congestion_weight: float = -1.0  # penalize local congestion around an agent
+    assign_spread_weight: float = 1.0  # penalize assignment to nearby drop nodes
+    @classmethod
+    def from_dict(cls, data: Dict) -> "PriorityParams":
+        return cls(
+            goal_weight=float(data.get("goal_weight", cls.goal_weight)),
+            pick_weight=float(data.get("pick_weight", cls.pick_weight)),
+            drop_weight=float(data.get("drop_weight", cls.drop_weight)),
+            step_tolerance=float(data.get("step_tolerance", cls.step_tolerance))
+            if data.get("step_tolerance", cls.step_tolerance) is not None
+            else None,
+            assign_pick_weight=float(data.get("assign_pick_weight", cls.assign_pick_weight)),
+            assign_drop_weight=float(data.get("assign_drop_weight", cls.assign_drop_weight)),
+            congestion_weight=float(data.get("congestion_weight", cls.congestion_weight)),
+            assign_spread_weight=float(data.get("assign_spread_weight", cls.assign_spread_weight)),
+        )
+
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+_PRIORITY_PARAMS_PATH = (
+    ROOT_DIR
+    / "policy"
+    / "train"
+    / "sweep_results"
+    / "priority_params_map_5x4_agents_10.json"
+)
+_PRIORITY_PARAMS = None
+_PRIORITY_PARAMS_LOADED_FROM_FILE = False
+
+DEFAULT_LOAD_BALANCE_WEIGHT = 0.0
+
+
+def _load_priority_params() -> PriorityParams:
+    # パスが存在するかどうかを確認し、存在する場合はファイルから読み込む。
+    # ファイルが存在しない場合はデフォルト値を返すが、"ファイル読み込みフラグ"は立てない。
+    global _PRIORITY_PARAMS_LOADED_FROM_FILE
+    if not _PRIORITY_PARAMS_PATH.exists():
+        _PRIORITY_PARAMS_LOADED_FROM_FILE = False
+        return PriorityParams()
+    try:
+        data = json.loads(_PRIORITY_PARAMS_PATH.read_text())
+        _PRIORITY_PARAMS_LOADED_FROM_FILE = True
+        return PriorityParams.from_dict(data)
+    except Exception as e:
+        print(f"Failed to load priority parameters: {e}")
+        _PRIORITY_PARAMS_LOADED_FROM_FILE = False
+        # Fall back to defaults if the file is malformed
+        return PriorityParams()
+
+
+def get_priority_params() -> PriorityParams:
+    """Return the in-memory priority parameters (defaults if unset)."""
+    return _PRIORITY_PARAMS or PriorityParams()
+
+
+def priority_params_exists() -> bool:
+    """Return True if priority parameters were successfully loaded from file.
+
+    This distinguishes between using default parameters (no file) and having
+    an explicit configuration file present. The requested behavior is to run
+    the policy only when such a file exists.
+    """
+    # Treat programmatically set params as present as well. During training
+    # ES rollouts call set_priority_params(...) in-memory, so require the
+    # policy to run when _PRIORITY_PARAMS is set even if no file exists.
+    if _PRIORITY_PARAMS_LOADED_FROM_FILE:
+        return True
+    return _PRIORITY_PARAMS is not None
+
+
+def set_priority_params(params: PriorityParams) -> None:
+    """Update the priority parameters used inside detect_actions."""
+    global _PRIORITY_PARAMS
+    _PRIORITY_PARAMS = params
+    # When parameters are set programmatically (e.g. during ES training), mark
+    # them as loaded so policy() will not early-return. This allows in-memory
+    # updates via set_priority_params(...) to take effect for rollouts.
+    try:
+        global _PRIORITY_PARAMS_LOADED_FROM_FILE
+        _PRIORITY_PARAMS_LOADED_FROM_FILE = True
+    except Exception:
+        pass
+
+
+def save_priority_params(params: PriorityParams) -> None:
+    """Persist priority parameters so that future runs can reuse them."""
+    payload = json.dumps(asdict(params), indent=2)
+    _PRIORITY_PARAMS_PATH.write_text(payload)
+
+
+# Load parameters once on import so that training outputs are picked up automatically.
+set_priority_params(_load_priority_params())
+
 
 def policy(obs, env):
+    # If priority parameters were not loaded from a file, do not run the
+    # full policy. Return a safe no-op: all agents stop and no tasks assigned.
+    if not priority_params_exists():
+        agent_num = getattr(env, "agent_num", None)
+        if agent_num is None:
+            return [], []
+        return [-1] * agent_num, [-1] * agent_num
+
     actions, count = detect_actions(env)
     task_assign = assign_task(env)
     return actions, task_assign, count
 
 def assign_task(env):
-    """Greedy task assignment based on travel distance to the next pick node."""
-    # Use original task indices to avoid index-shift bugs when popping from local copies.
-    # We will select tasks by their index in env.current_tasklist (and env.assigned_list)
+    """Task assignment with tunable priority parameters."""
     task_assign = [-1] * env.agent_num
 
-    if not hasattr(env, 'current_tasklist') or len(env.current_tasklist) == 0:
-        print("No tasks available for assignment")
+    if not hasattr(env, "current_tasklist") or len(env.current_tasklist) == 0:
         return task_assign
+
+    params = get_priority_params()
 
     # available_indices are indices in env.current_tasklist that are unassigned
     available_indices = [idx for idx, a in enumerate(env.assigned_list) if a == -1]
+
+    # system-level unassigned task ratio (0.0 if no tasks)
+    total_slots = len(env.assigned_list) if hasattr(env, "assigned_list") else 0
+    unassigned_cnt = sum(1 for a in env.assigned_list if a == -1) if total_slots > 0 else 0
+    unassigned_ratio = float(unassigned_cnt) / float(total_slots) if total_slots > 0 else 0.0
+
+    def _assigned_goal(idx: int) -> Optional[int]:
+        if idx < len(env.assigned_tasks) and len(env.assigned_tasks[idx]) >= 2:
+            return env.assigned_tasks[idx][1]
+        if idx < len(env.goal_array):
+            return env.goal_array[idx]
+        return None
+
+    other_targets = []
+    for j in range(env.agent_num):
+        target = _assigned_goal(j)
+        if target is not None:
+            other_targets.append(int(target))
 
     for i in range(env.agent_num):
         # skip if agent already has an assigned task
@@ -37,7 +178,13 @@ def assign_task(env):
             continue
 
         best_task_idx = -1
-        best_dist = float('inf')
+        best_score = float("inf")
+
+        base_node = (
+            env.current_start[i]
+            if i < len(env.current_start) and env.current_start[i] is not None
+            else env.goal_array[i]
+        )
 
         for idx in list(available_indices):
             # idx indexes into env.current_tasklist
@@ -46,28 +193,46 @@ def assign_task(env):
             except Exception:
                 continue
 
-            # task expected as [pick_node, drop_node]
+            # task expected as [pick_node, drop_node, (optional deadline)]
+            if len(task) < 2:
+                continue
+
             pick_node = task[0]
             drop_node = task[1]
-            # measure distance from agent's current goal (or location) to pick_node
-            # use env.get_path_length which may return None
-            path_to_pick = env.get_path_length(env.current_start[i], pick_node)
-            path_pick_to_drop = env.get_path_length(pick_node, drop_node)
-            path_length = path_to_pick + path_pick_to_drop
-            if path_length is None:
-                print("Path length is None")
+
+            # distances for scoring
+            dist_to_pick = env.get_path_length(base_node, pick_node)
+            dist_pick_to_drop = env.get_path_length(pick_node, drop_node)
+
+            if dist_to_pick is None:
                 continue
-            if path_length < best_dist:
-                best_dist = path_length
+            if dist_pick_to_drop is None:
+                dist_pick_to_drop = float("inf")
+
+            spread_penalty = 0.0
+            if other_targets:
+                for target in other_targets:
+                    dist = env.get_path_length(drop_node, target)
+                    if dist is None:
+                        continue
+                    spread_penalty += 1.0 / (float(dist) + 1.0)
+
+            score = (
+                params.assign_pick_weight * float(dist_to_pick)
+                + params.assign_drop_weight * float(dist_pick_to_drop)
+                + DEFAULT_LOAD_BALANCE_WEIGHT * float(unassigned_ratio)
+                + params.assign_spread_weight * spread_penalty
+            )
+
+            if score < best_score:
+                best_score = score
                 best_task_idx = idx
-    
-        if best_task_idx == -1:
-            print(f"No suitable task found for agent {i}")
 
         if best_task_idx != -1:
             task_assign[i] = best_task_idx
             # reserve this task locally so another agent won't pick it in this loop
             available_indices.remove(best_task_idx)
+        
 
     return task_assign
 
@@ -76,38 +241,39 @@ def detect_actions(env):
     PIBTをもとに、各エージェントの行動を決定する
     各エージェントの割り当てられたタスクに基づき、そのタスク完了にかかる最短経路で優先順位を決定する
     """
+    params = get_priority_params()
+    speed = float(getattr(env, "speed", 5.0))
+    step_tolerance = _resolve_step_tolerance(env, params, speed)
     actions = []
-    shortest_path_distances = []
-    # if env.goal_array is None:
-    #     return [-1]*env.agent_num
+    if env.goal_array is None:
+        return [-1]*env.agent_num
     # 各エージェントの最短経路距離を計算
+    priority_scores = []
     for i in range(env.agent_num):
-        assigned_task = env.assigned_tasks[i] if i < len(env.assigned_tasks) else assign_task(env)[i]
-        has_task = bool(assigned_task)
-        current_goal = env.goal_array[i] if i < len(env.goal_array) else None
-        path_length = float("inf")
-        if has_task and len(assigned_task) >= 2:
-            pick_node = assigned_task[0]
-            drop_node = assigned_task[1]
-            if current_goal is not None and current_goal == drop_node:
-                path_length = calculate_goal_path_length(env, i, assigned_task)
-            elif current_goal is not None and current_goal == pick_node:
-                path_length = calculate_task_path_length(env, i, assigned_task)
-        shortest_path_distances.append((i, path_length))
+        assigned_task = env.assigned_tasks[i] if i < len(env.assigned_tasks) else []
+        score = _priority_score(env, i, assigned_task)
+        priority_scores.append((i, score))
 
-    # 最短経路距離に基づき優先順位を決定（距離が短いほど高優先度）
-    priority_order = sorted(shortest_path_distances, key=lambda x: x[1])
+    # 最短経路距離（または重みづけ距離）に基づき優先順位を決定（距離が短いほど高優先度）
+    priority_order = sorted(priority_scores, key=lambda x: x[1])
 
     # 優先度順に行動を決定。高優先度のエージェントと衝突しない行動を選択する
     # 基本的には最短経路上の行動を選択するが、衝突する場合は他の行動を選択
     # i番目の可能な行動の中でそれ以上の優先度と衝突しない行動がなかった場合、一つ上の優先度の行動を再選択する
     # 占有されるノードを管理（何ステップ後に占有されるかも一緒に）List[(node, step)]
     occupied_nodes = [(None, None)] * env.agent_num
+    # 停止行動を行うエージェントの場合のノード占有を管理するリスト
+    # List[(start_node, to_node, release_step)]
+    occupied_stop_nodes = [(None, None, 0)] * env.agent_num
+    # ノードから近い場合にはそこを占有するようにする
+    occupied_near_nodes = [(None, None)] * env.agent_num
     # 占有されるエッジを管理 List[ (from_node, to_node) ]
-    occupied_edges = [(None, None)] * env.agent_num
+    # 次に進むノードを設定したあとに、次の行動が取れるように、最低一つは経路を確保しておくために、occupied_edgesの後半に用意
+    occupied_edges = [(None, None, 0)] * (env.agent_num * 2)
+
     current_priority = 0 # 行動が決定したエージェント数
     most_high_priority = 0  # 最も高い優先度のエージェントインデックス
-    max_wait = 4  # 最大停止ステップ数
+    max_wait = 1  # 最大停止ステップ数
     # 各エージェントが可能な行動をリスト化し、行動を変更するときに同じ行動を繰り返さないようにする
     avail_actions_list = []
     for i in range(env.agent_num):
@@ -141,13 +307,37 @@ def detect_actions(env):
         avail_actions_list.append(sorted_avail_actions)
         actions.append(None)
 
-    count = 0
     row_avail_actions_list = copy.deepcopy(avail_actions_list)
-    for i in range(env.agent_num):
-        if len(row_avail_actions_list[i]) == max_wait+1:
-            occupied_edges[i] = (env.current_start[i], row_avail_actions_list[i][0])
-    while current_priority < env.agent_num:
-        count += 1
+
+    # ノードに近いエージェントについては, そのノードを占有しておく
+    for agent_id in range(env.agent_num):
+        start_node = env.current_start[agent_id]
+        next_node = row_avail_actions_list[agent_id][0]  # 最短経路上の次ノード
+        to_start = calculate_steps_to_node(env, agent_id, start_node)
+        to_next = calculate_steps_to_node(env, agent_id, next_node)
+        if to_start < step_tolerance/2:
+            occupied_near_nodes[agent_id] = (start_node, 0)
+        elif to_next < step_tolerance/2:
+            occupied_near_nodes[agent_id] = (next_node, 0)
+
+    # エッジ上のエージェントについては先にエッジの占有をしておく
+    for agent_id in range(env.agent_num):
+        if len(row_avail_actions_list[agent_id]) == max_wait+1: # これは、エッジ上にいるとき
+            next_node = row_avail_actions_list[agent_id][0]  # エッジ上にいるときは進行方向のノードにしか行けない
+            needed_step = calculate_steps_to_node(env, agent_id, next_node)
+            occupied_edges[agent_id] = (env.current_start[agent_id], next_node, needed_step)
+
+    count = 0
+    
+    while current_priority < env.agent_num and count < 100:
+        # count += 1
+        # if count > 10000:
+        #     # 無限ループ防止
+        #     # 可能な行動が見つからない場合、一生停止し続けてしまうため、衝突させにいく
+        #     for i in range(env.agent_num):
+        #         if actions[i] is None:
+        #             actions[i] = row_avail_actions_list[i][0]
+        #     break
         # 優先度順にエージェントの行動を決定
         # 衝突しない可能な行動が見つからなかった場合、current_priorityを減らして一つ上の優先度のエージェントの行動を再選択する
         agent_idx, _ = priority_order[current_priority]
@@ -155,54 +345,126 @@ def detect_actions(env):
         # ノードとエッジの占有状況を考慮して行動を決定
         avail_actions = avail_actions_list[agent_idx]
         action_selected = False
+        current_node = env.current_start[agent_idx]
         for action in list(avail_actions):
             if len(row_avail_actions_list[agent_idx]) == max_wait+1: # これは、エッジ上にいるとき
                 next_node = row_avail_actions_list[agent_idx][0]  # エッジ上にいるときは進行方向のノードにしか行けない
-                # エッジの占有状況を追加
-                occupied_edges[agent_idx] = (env.current_start[agent_idx], next_node)
             elif action < 0: # ノード上にいて、行き先がなく停止を選択するとき,next_nodeは現在ノード
-                next_node = env.current_start[agent_idx]
+                next_node = current_node
             else:
                 next_node = action
             needed_step = calculate_steps_to_node(env, agent_idx, next_node) # エージェントが次のノードに到達するまでに必要なステップ数
             conflict = False
             for check_idx in range(current_priority):
                 higher_agent_idx, _ = priority_order[check_idx]
-                occ_node, _ = occupied_nodes[higher_agent_idx]
-                if occ_node == next_node:
+                occ_node, occ_needed_step = occupied_nodes[higher_agent_idx]
+                if occ_node == next_node and abs(occ_needed_step - needed_step) <= step_tolerance:
                     conflict = True
                     avail_actions.remove(action)
                     break
-                start, end = occupied_edges[higher_agent_idx]
-                if start is not None and end is not None:
-                    if end == env.current_start[agent_idx] and start == next_node:
+                occ_stop_start, occ_stop_end, occ_stop_release = occupied_stop_nodes[higher_agent_idx]
+                # 停止行動以外の行動を行った時, 次のノードが停止行動をとっているエージェントの現在ノードと次ノードと同じで、かつそのエージェントがneeded_step以内にそのノードを解放しない場合、衝突とみなす
+                if action >= 0 and occ_stop_start == current_node and occ_stop_end == next_node:
+                    if abs(occ_stop_release - needed_step + 1) <= step_tolerance:
                         conflict = True
                         avail_actions.remove(action)
                         break
+                # ノードから近いエージェントがいないかチェック
+                near_stop_node, near_needed_step = occupied_near_nodes[higher_agent_idx]
+                if action >= 0 and near_stop_node == next_node and abs(near_needed_step - needed_step) <= step_tolerance:
+                    conflict = True
+                    avail_actions.remove(action)
+                    break
+                # エッジの占有状況を確認
+                start, end, release = occupied_edges[higher_agent_idx]
+                if start is not None and end is not None:
+                    reverse_direction = start == next_node and end == current_node
+                    # 逆方向に進むエージェントがいる場合、または同じ方向に進むエージェントがいて、そのエージェントがneeded_step以内にそのエッジを解放しない場合、衝突とみなす
+                    if reverse_direction:
+                        conflict = True
+                        avail_actions.remove(action)
+                        break
+                # デッドロック防止のために、最低一つは経路を確保
+                start, end, release = occupied_edges[higher_agent_idx + env.agent_num]
+                if start is not None and end is not None:
+                    reverse_direction = start == next_node and end == current_node
+                    if reverse_direction:
+                        conflict = True
+                        avail_actions.remove(action)
+                        break
+                
             if not conflict:
                 actions[agent_idx] = action
                 action_selected = True
                 current_priority += 1
                 # ノードの占有状況を更新
-                occupied_nodes[agent_idx] = (next_node, needed_step + max(0, -action))  # 停止の場合、needed_stepに停止ステップ数を加える
-                # エッジの占有状況を更新
-                occupied_edges[agent_idx] = (env.current_start[agent_idx], next_node)
+                # 停止行動を選択した場合、needed_stepにはneeded_step+1を設定（停止しているため、そのノードは次のステップまで占有される）
+                if action < 0:
+                    if current_node == next_node:
+                        occupied_nodes[agent_idx] = (current_node, 0)
+                    else:
+                        occupied_stop_nodes[agent_idx] = (current_node, next_node, needed_step)
+                        occupied_edges[agent_idx] = (current_node, next_node, needed_step)
+                else:
+                    occupied_nodes[agent_idx] = (next_node, needed_step-1)
+                    occupied_edges[agent_idx] = (current_node, next_node, needed_step-1)
+                # デッドロックを回避するために、次のノードに到着したあとの経路が一つしか選択肢が残されていなかったら、その経路も占有
+                # next_node到着後の可能な行動を確認
+                graph = env.G               # NetworkX graph built in MapMake
+                neighbors = list(graph.neighbors(next_node))
+                # next_node, neighborsがoccupied_edgesに存在するか確認し、占有されているものをnext_edgesから除外
+                next_edges = [(next_node, nb) for nb in neighbors]
+                filtered_edges = []
+                for edge in next_edges:
+                    occ_start, occ_end = edge
+                    blocked = False
+                    # higher priority agentsの占有状況を確認
+                    for check_idx in range(current_priority):
+                        higher_agent_idx, _ = priority_order[check_idx]
+                        occ_e_start, occ_e_end, occ_release = occupied_edges[higher_agent_idx]
+                        if occ_e_start is not None and occ_e_end is not None:
+                            reverse_direction = occ_start == occ_e_end and occ_end == occ_e_start
+                            if reverse_direction:
+                                blocked = True
+                                break
+                        occ_e_start2, occ_e_end2, occ_release2 = occupied_edges[higher_agent_idx + env.agent_num]
+                        if occ_e_start2 is not None and occ_e_end2 is not None:
+                            reverse_direction = occ_start == occ_e_end2 and occ_end == occ_e_start2
+                            if reverse_direction:
+                                blocked = True
+                                break
+                    if not blocked:
+                        filtered_edges.append(edge)
+                if len(filtered_edges) == 1:
+                    occ_start, occ_end = filtered_edges[0]
+                    occupied_edges[agent_idx + env.agent_num] = (occ_start, occ_end, 0)
+
+                
                 avail_actions.remove(action)
+                # 一つ行動が決定したらループを抜ける
                 break
+    
         if not action_selected:
             # 衝突が避けられない場合可能な行動を補填し、一つ上の優先度のエージェントの行動を再選択
-
             # 最上位優先度エージェントの場合、停止を選択
             if current_priority <= most_high_priority:
                 # 最優先エージェントで可能な行動がない場合、停止を選択
-                actions[agent_idx] = -3
+                actions[agent_idx] = -max_wait
                 current_priority += 1
                 most_high_priority += 1
                 # ノードの占有状況を更新
-                occupied_nodes[agent_idx] = (env.current_start[agent_idx], needed_step + 3)
+                # current_startノード、next_nodeからの距離がenv.speed以下の場合、そのノードを停止している間も占有し続ける
+                distance_to_current = calculate_steps_to_node(env, agent_idx, current_node)
+                if distance_to_current <= step_tolerance:
+                    occupied_nodes[agent_idx] = (current_node, distance_to_current)
+                elif calculate_steps_to_node(env, agent_idx, next_node) <= step_tolerance:
+                    occupied_nodes[agent_idx] = (next_node, calculate_steps_to_node(env, agent_idx, next_node))
                 # エッジの占有状況を更新
+                # エージェントがエッジ上にいる場合、現在ノードから次ノードへのエッジを占有
                 if len(row_avail_actions_list[agent_idx]) == max_wait+1:
-                    occupied_edges[agent_idx] = (env.current_start[agent_idx], row_avail_actions_list[agent_idx][0])
+                    occupied_edges[agent_idx] = (current_node, row_avail_actions_list[agent_idx][0], step_tolerance)
+                else:
+                    occupied_edges[agent_idx] = (None, None, 0)
             else:
                 # 現在のagent_idxの可能行動をリセット
                 avail_actions_list[agent_idx] = copy.deepcopy(row_avail_actions_list[agent_idx])
@@ -212,8 +474,8 @@ def detect_actions(env):
                 # 一つ上の優先度のエージェントが占有しているノードとエッジの占有状況を解除
                 # occupied_nodesとoccupied_edgesから、最も後に追加された該当エージェントの占有状況を削除
                 occupied_nodes[prev_agent_idx] = (None, None)
-                if len(row_avail_actions_list[prev_agent_idx]) > max_wait+1:
-                    occupied_edges[prev_agent_idx] = (None, None)
+                occupied_edges[prev_agent_idx] = (None, None, 0)
+                occupied_edges[prev_agent_idx + env.agent_num] = (None, None, 0)
                 continue
     
     return actions, count
@@ -259,3 +521,110 @@ def calculate_steps_to_node(env, agent_idx, target_node):
 
     steps_needed = math.ceil(euclidean_distance / env.speed)
     return steps_needed
+
+
+def _default_step_tolerance(speed: float) -> float:
+    if speed <= 0:
+        return float("inf")
+    return max(1, math.ceil(5.0 / speed))+ 1
+
+
+def _resolve_step_tolerance(env, params: PriorityParams, speed: float) -> float:
+    value = getattr(params, "step_tolerance", None)
+    if value is not None:
+        try:
+            return float(value)
+        except Exception:
+            pass
+    return _default_step_tolerance(speed)
+
+
+def _agent_congestion(env, agent_idx: int, max_steps: int = 5) -> float:
+    """Count agents reachable within ``max_steps`` steps from current start or next node."""
+
+    # current_start と現在向かっている next node (current_goal) を起点候補として列挙する
+
+    def _candidate_nodes(idx: int) -> List[int]:
+        nodes: List[int] = []
+        if idx < len(env.current_start):
+            start_node = env.current_start[idx]
+            if start_node is not None:
+                nodes.append(int(start_node))
+        if idx < len(env.current_goal):
+            next_node = env.current_goal[idx]
+            if next_node is not None and int(next_node) not in nodes:
+                nodes.append(int(next_node))
+        if not nodes and idx < len(env.obs):
+            try:
+                nodes.append(int(env.obs[idx][2]))
+            except Exception:
+                pass
+        return nodes
+
+    # 起点候補が得られない場合は混雑度 0 とする
+    origins = _candidate_nodes(agent_idx)
+    if not origins:
+        return 0.0
+
+    # speed から距離をステップ数に換算するための係数を取得
+    speed = float(getattr(env, "speed", 1.0))
+    if speed <= 0:
+        return 0.0
+
+    # 他エージェントの current_start / current_goal を目的地候補とみなし、5 ステップ以内に到達できる数を数える
+    count = 0
+    for other_idx in range(env.agent_num):
+        if other_idx == agent_idx:
+            continue
+        targets = _candidate_nodes(other_idx)
+        if not targets:
+            continue
+        reached = False
+        for origin in origins:
+            for target in targets:
+                if target == origin:
+                    count += 1
+                    reached = True
+                    break
+                distance = env.get_path_length(origin, target)
+                if distance is None:
+                    continue
+                steps_needed = math.ceil(float(distance) / speed)
+                if steps_needed <= max_steps:
+                    count += 1
+                    reached = True
+                    break
+            if reached:
+                break
+    return float(count)
+
+
+def _priority_score(env, agent_idx: int, assigned_task: List[int]) -> float:
+    """Compute the priority score for an agent given the current policy parameters."""
+    params = get_priority_params()
+    has_task = bool(assigned_task)
+    # 各エージェントの可能な行動数
+    _, avail_actions = env.get_avail_agent_actions(agent_idx, env.n_actions)
+    avail_actions_num = len(avail_actions)
+    if not has_task or len(assigned_task) < 2:
+        return params.congestion_weight * _agent_congestion(env, agent_idx)
+
+    pick_node = assigned_task[0]
+    drop_node = assigned_task[1]
+    base_node = env.current_start[agent_idx] if env.current_start[agent_idx] is not None else env.goal_array[agent_idx]
+    current_goal = env.goal_array[agent_idx] if agent_idx < len(env.goal_array) else None
+
+    if current_goal is not None and current_goal == drop_node:
+        dist_goal = env.get_path_length(base_node, drop_node)
+        dist_goal = dist_goal if dist_goal is not None else float("inf")
+        return params.goal_weight * dist_goal + params.congestion_weight * _agent_congestion(env, agent_idx)
+
+    dist_pick = env.get_path_length(base_node, pick_node)
+    dist_drop = env.get_path_length(pick_node, drop_node)
+    dist_pick = dist_pick if dist_pick is not None else float("inf")
+    dist_drop = dist_drop if dist_drop is not None else float("inf")
+    return (
+        params.pick_weight * dist_pick
+        + params.drop_weight * dist_drop
+        + params.congestion_weight * _agent_congestion(env, agent_idx)
+    )
