@@ -349,8 +349,8 @@ def detect_actions(env):
                 if start is not None and end is not None:
                     same_direction = start == env.current_start[agent_idx] and end == next_node
                     reverse_direction = start == next_node and end == env.current_start[agent_idx]
-                    # 逆方向に進むエージェントがいる場合、または同じ方向に進むエージェントがいて、そのエージェントがneeded_step以内にそのエッジを解放しない場合、衝突とみなす
-                    if reverse_direction:
+                    # 逆方向に進むエージェントが同時刻に交差する場合のみ衝突とみなす
+                    if reverse_direction and abs(release - needed_step) <= step_tolerance:
                         conflict = True
                         avail_actions.remove(action)
                         break
