@@ -62,6 +62,17 @@ python policy/train/continue_train_by_gpu.py \
 | `--sweep-workers` | スイープ時に同時実行する学習ジョブ数 (デフォルトは `--gpu-devices` の数か 1)。 |
 | `--sweep-plot-dir` | スイープ実行時に各ランの学習曲線 PNG を保存するディレクトリ。指定しない場合は生成しない。 |
 | `--gpu-devices` | 利用するデバイスをカンマ区切りで指定 (`"0,1"`, `"cuda:1,cpu"` など)。スイープ時は順番に割り当て。 |
+
+## ランダムエージェント数で学習する場合
+
+以下のスクリプトは、各エピソードで `agent_num` を
+`2〜(ノード数の0.5倍)` の範囲でランダム化して学習します。
+
+```bash
+python policy/train/continue_train_by_gpu_random_agent_num.py --map-name map_5x4 --workers 8
+```
+
+`--random-map` を付けると MAP_POOL からマップもランダムに選びます。
 ## スイープモード
 
 あらかじめ定義されたマップとエージェント数 (各マップでノード数の 1/4・1/2・3/4 を丸めた値、最低 3 体) を順番に学習させるには、以下を実行します:
