@@ -90,6 +90,22 @@ python policy/train/continue_train_by_gpu_random_agent_num.py \
   --resume-from-log
 ```
 
+## step_tolerance のみ学習する場合
+
+以下のスクリプトは `step_tolerance` だけを学習し、各マップで
+エージェント数を 3〜15 に変えながら学習します。保存先は
+`policy/train/step_tolerance_results` です。
+
+```bash
+python policy/train/continue_train_by_gpu_step_tolerance_only.py \
+  --iterations 150 \
+  --population 32 \
+  --episodes-per-candidate 20 \
+  --eval-episodes 20 \
+  --candidate-workers 16 \
+  --workers 0
+```
+
 ## スイープモード
 
 あらかじめ定義されたマップとエージェント数 (各マップでノード数の 1/4・1/2・3/4 を丸めた値、最低 3 体) を順番に学習させるには、以下を実行します:
