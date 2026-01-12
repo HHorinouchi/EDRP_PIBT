@@ -35,6 +35,45 @@ def _sample_env_config_random_agent(rng: np.random.Generator) -> dict:
     return base._normalized_env_config(cfg)
 
 
+def _run_for_map(map_name: str, args: argparse.Namespace) -> None:
+    base.ENV_CONFIG["map_name"] = map_name
+    base.ENV_CONFIG = base._normalized_env_config(base.ENV_CONFIG)
+
+    _sample_env_config_random_agent.random_map = False
+
+    max_steps = args.max_steps if args.max_steps > 0 else None
+    workers = args.workers if args.workers > 0 else (os.cpu_count() or 4)
+
+    log_csv = args.log_csv.format(map_name=map_name)
+    plot_png = None if args.plot_png is None else args.plot_png.format(map_name=map_name)
+
+    base.train_priority_params_gpu(
+        iterations=args.iterations,
+        population=args.population,
+        sigma=args.sigma,
+        lr=args.lr,
+        episodes_per_candidate=args.episodes_per_candidate,
+        eval_episodes=args.eval_episodes,
+        seed=args.seed,
+        domain_randomize=True,
+        collision_penalty=args.collision_penalty,
+        save_params_json=None,
+        log_csv=log_csv,
+        plot_png=plot_png,
+        clip_step_norm=args.clip_step_norm,
+        best_update_mode=args.best_update_mode,
+        best_update_alpha=args.best_update_alpha,
+        best_update_gap=args.best_update_gap,
+        max_steps=max_steps,
+        workers=workers,
+        candidate_workers=args.candidate_workers,
+        device_override=args.device,
+        verbose=False,
+        reuse_env=False,
+        resume_from_log=args.resume_from_log,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--iterations", type=int, default=40)
@@ -58,14 +97,22 @@ def main() -> None:
     parser.add_argument("--resume-from-log", action="store_true")
     parser.add_argument("--map-name", type=str, default=None)
     parser.add_argument("--random-map", action="store_true")
+    parser.add_argument("--sweep-maps", action="store_true")
     args = parser.parse_args()
+
+    base.sample_env_config = _sample_env_config_random_agent
+
+    if args.sweep_maps:
+        maps = list(base.SWEEP_MAP_LIST)
+        for map_name in maps:
+            _run_for_map(map_name, args)
+        return
 
     if args.map_name is not None:
         base.ENV_CONFIG["map_name"] = args.map_name
     base.ENV_CONFIG = base._normalized_env_config(base.ENV_CONFIG)
 
     _sample_env_config_random_agent.random_map = bool(args.random_map)
-    base.sample_env_config = _sample_env_config_random_agent
 
     max_steps = args.max_steps if args.max_steps > 0 else None
     workers = args.workers if args.workers > 0 else (os.cpu_count() or 4)

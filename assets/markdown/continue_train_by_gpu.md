@@ -73,6 +73,23 @@ python policy/train/continue_train_by_gpu_random_agent_num.py --map-name map_5x4
 ```
 
 `--random-map` を付けると MAP_POOL からマップもランダムに選びます。
+
+同じ設定でランダムエージェント数版を使う場合の例:
+
+```bash
+python policy/train/continue_train_by_gpu_random_agent_num.py \
+  --sweep-maps \
+  --iterations 150 \
+  --population 32 \
+  --episodes-per-candidate 20 \
+  --eval-episodes 20 \
+  --candidate-workers 16 \
+  --workers 0 \
+  --plot-png policy/train/sweep_results/plots/random_agent_{map_name}.png \
+  --log-csv policy/train/sweep_results/logs/train_log_random_agent_{map_name}.csv \
+  --resume-from-log
+```
+
 ## スイープモード
 
 あらかじめ定義されたマップとエージェント数 (各マップでノード数の 1/4・1/2・3/4 を丸めた値、最低 3 体) を順番に学習させるには、以下を実行します:
