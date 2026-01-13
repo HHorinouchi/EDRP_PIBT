@@ -1,16 +1,16 @@
 # continue_train_by_gpu.py ガイド
 
-`policy/train/continue_train_by_gpu.py` に実装されている GPU 対応進化戦略 (Evolution Strategy; ES) トレーナーの使い方と、内部処理の流れをまとめたドキュメントです。
+`policy/train/continue_train_by_gpu.py` に実装されている CPU 対応進化戦略 (Evolution Strategy; ES) トレーナーの使い方と、内部処理の流れをまとめたドキュメントです。
 
 ## 概要
 
-このスクリプトは `policy/my_policy.py` が利用する PIBT の優先度パラメータを最適化します。`DrpEnv` 上で候補パラメータを評価し、CUDA もしくは Apple MPS (利用可能な場合) で ES の更新計算を行います。環境のロールアウト処理は CPU 側で実行されます。
+このスクリプトは `policy/my_policy.py` が利用する PIBT の優先度パラメータを最適化します。`DrpEnv` 上で候補パラメータを評価し、ES の更新計算も含めて CPU 上で実行します。環境のロールアウト処理は従来通り CPU 側で行われます。
 
 1 イテレーションあたりの主な処理:
 
 1. 現在のパラメータベクトル周辺にガウスノイズを付加して候補を生成。
 2. 各候補パラメータを 1 本以上のエピソードで評価 (必要に応じてドメインランダム化を実施)。
-3. 報酬を正規化し、GPU 上で ES の勾配推定と更新を計算。
+3. 報酬を正規化し、CPU 上で ES の勾配推定と更新を計算。
 4. 最良スコアのパラメータを記録し、必要に応じて JSON へ書き出し。
 5. 各イテレーションの統計情報を CSV に追記。
 
@@ -57,11 +57,10 @@ python policy/train/continue_train_by_gpu.py \
 | `--plot-png` | 学習曲線を保存する PNG の出力パス。未指定なら `--log-csv` と同じフォルダに `<stem>_learning_curve.png` を作成。 |
 | `--save-params-json` | 最良パラメータの JSON 保存先 (`PriorityParams` のフィールド名で保存)。
 | `--clip-step-norm` | ES 更新ベクトルのノルム制限 (任意)。
-| `--workers` | CPU ロールアウトの並列プロセス数。
-| `--candidate-workers` | ES の候補パラメータを並列評価するプロセス数。`-1` で自動的に CPU コア数に設定。 |
-| `--sweep-workers` | スイープ時に同時実行する学習ジョブ数 (デフォルトは `--gpu-devices` の数か 1)。 |
+| `--workers` | エピソードロールアウトを並列化するプロセス数 (`0` で無効化、`-1` で自動構成)。 |
+| `--candidate-workers` | ES の候補パラメータを並列評価するプロセス数。`-1` で CPU コア数に合わせて自動設定。 |
+| `--sweep-workers` | スイープ時に同時実行する学習ジョブ数 (指定しない場合は 1)。 |
 | `--sweep-plot-dir` | スイープ実行時に各ランの学習曲線 PNG を保存するディレクトリ。指定しない場合は生成しない。 |
-| `--gpu-devices` | 利用するデバイスをカンマ区切りで指定 (`"0,1"`, `"cuda:1,cpu"` など)。スイープ時は順番に割り当て。 |
 
 ## ランダムエージェント数で学習する場合
 
@@ -83,10 +82,10 @@ python policy/train/continue_train_by_gpu_random_agent_num.py \
   --population 32 \
   --episodes-per-candidate 20 \
   --eval-episodes 20 \
-  --candidate-workers 16 \
+  --candidate-workers 8 \
   --workers 0 \
   --plot-png policy/train/sweep_results/plots/random_agent_{map_name}.png \
-  --log-csv policy/train/sweep_results/logs/train_log_random_agent_{map_name}.csv \
+  --log-csv policy/train/sweep_results/logs/train_log_cpu_random_agent_{map_name}.csv \
   --resume-from-log
 ```
 
@@ -98,11 +97,11 @@ python policy/train/continue_train_by_gpu_random_agent_num.py \
 
 ```bash
 python policy/train/continue_train_by_gpu_step_tolerance_only.py \
-  --iterations 150 \
+  --iterations 100 \
   --population 32 \
   --episodes-per-candidate 20 \
   --eval-episodes 20 \
-  --candidate-workers 16 \
+  --candidate-workers 4 \
   --workers 0
 ```
 
@@ -118,8 +117,7 @@ python policy/train/continue_train_by_gpu.py \
   --population 32 \
   --episodes-per-candidate 20 \
   --eval-episodes 20 \
-  --candidate-workers 16 \
-  --workers 0 \
+  --candidate-workers 4 \
   --sweep-plot-dir policy/train/sweep_results/plots \
   --sweep-output-dir policy/train/sweep_results \
   --resume
@@ -136,9 +134,9 @@ python policy/train/continue_train_by_gpu.py \
 ## リソース最大活用のヒント
 
 - `--candidate-workers -1` で ES の候補評価を CPU コア数いっぱいに並列化できます。`--workers` も同時に使う場合は、総プロセス数が過剰にならないよう両者の値を調整してください。
-- スイープ時は `--sweep-workers <並列ジョブ数>` と `--gpu-devices 0,1,...` を組み合わせると、各ジョブを異なる GPU に割り当てつつ同時実行できます (例: `--gpu-devices 0,1 --sweep-workers 2`)。
+- `--workers -1` はエピソードの並列実行数を自動で設定しますが、`0` (デフォルト) のままなら追加プロセスを作りません。
 - `--sweep-plot-dir` を設定すると、各マップ×エージェント数ごとの学習曲線 PNG が指定ディレクトリに自動保存されます。容量が増えるため必要な条件に絞って有効化してください。
-- GPU での計算は ES 更新部のみですが、複数ジョブを並列化することで全 GPU を稼働させられます。CPU 側の環境ロールアウトがボトルネックになるため、必要に応じて `--candidate-workers` や `--workers` を増やしメモリ使用量と相談してください。
+- すべての計算が CPU 上で完結するため、複数ジョブを同時に実行する場合は各スクリプトの `--candidate-workers` と `--workers` を合計して CPU コア数を超えないように調整してください。
 - フルパラレル実行例:
 
   ```bash
@@ -149,9 +147,8 @@ python policy/train/continue_train_by_gpu.py \
     --episodes-per-candidate 8 \
     --eval-episodes 20 \
     --candidate-workers -1 \
-    --workers 2 \
+    --workers -1 \
     --sweep-workers 4 \
-    --gpu-devices 0,1,2,3 \
     --sweep-output-dir policy/train/sweep_results_fast
   ```
 
@@ -169,7 +166,7 @@ python policy/train/continue_train_by_gpu.py \
 
 ```bash
 python policy/train/plot_training_metrics.py \
-  --log-csv policy/train/train_log_gpu.csv \
+  --log-csv policy/train/train_log_cpu.csv \
   --output-dir policy/train/plots
 ```
 
@@ -183,7 +180,7 @@ python policy/train/plot_training_metrics.py \
 ## 実務上のヒント
 
 - 未知のマップでは `iterations` や `population` を控えめに設定し、実行時間と収束傾向を確認してから段階的に増やすのが安全です。
-- マルチコア CPU では `--workers` を併用してロールアウトを並列化すると高速化できます。GPU は ES 計算のみを高速化します。
+- マルチコア CPU では `--workers` を併用してロールアウトを並列化すると高速化できます。CPU リソースの奪い合いを避けるため、他ジョブとの同時実行時は設定値を抑えてください。
 - 衝突でエピソードが打ち切られる場合は、衝突ペナルティを強めるか `bounceback` モードを試すと安定しやすくなります。
 - 再現性が必要な比較では `--seed` を揃えて実行してください。
 - スイープ実行後は `sweep_summary.json` を確認し、追加チューニングすべきマップ・エージェント組を見極めましょう。

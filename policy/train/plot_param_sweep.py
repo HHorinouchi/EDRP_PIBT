@@ -227,7 +227,13 @@ def _make_env_config(map_name: str, agent_num: int) -> dict:
     return _normalized_env_config(cfg)
 
 
-def _run_episode(env_config: dict, step_limit: Optional[int], param_name: Optional[str] = None, delta: Optional[float] = None) -> float:
+def _run_episode(
+    env_config: dict,
+    step_limit: Optional[int],
+    param_name: Optional[str] = None,
+    delta: Optional[float] = None,
+    param_value: Optional[float] = None,
+) -> float:
     env = DrpEnv(**_normalized_env_config(env_config))
     obs = env.reset()
     done_flags = [False for _ in range(env.agent_num)]
@@ -301,6 +307,7 @@ def _run_episode(env_config: dict, step_limit: Optional[int], param_name: Option
         env.last_termination_reason = termination_reason
         env.last_param_name = param_name
         env.last_param_delta = None if delta is None else float(delta)
+        env.last_param_value = None if param_value is None else float(param_value)
     except Exception:
         pass
 
@@ -316,17 +323,26 @@ def _evaluate_params(
     seed: int,
     param_name: Optional[str],
     delta: Optional[float],
+    param_value: Optional[float],
 ) -> float:
     params = PriorityParams.from_dict(params_dict)
     set_priority_params(params)
     rewards = []
     for i in range(episodes):
         np.random.seed(seed + i)
-    rewards.append(_run_episode(env_config, max_steps, param_name=param_name, delta=delta))
+        rewards.append(
+            _run_episode(
+                env_config,
+                max_steps,
+                param_name=param_name,
+                delta=delta,
+                param_value=param_value,
+            )
+        )
     return float(np.mean(rewards)) if rewards else 0.0
 
 
-def _evaluate_worker(payload: dict) -> Tuple[str, float, float]:
+def _evaluate_worker(payload: dict) -> Tuple[str, float, float, float]:
     env_config = payload["env_config"]
     params_dict = payload["params_dict"]
     episodes = payload["episodes"]
@@ -334,8 +350,18 @@ def _evaluate_worker(payload: dict) -> Tuple[str, float, float]:
     seed = payload["seed"]
     param_name = payload["param_name"]
     delta = payload["delta"]
-    mean_reward = _evaluate_params(env_config, params_dict, episodes, max_steps, seed, param_name, delta)
-    return param_name, delta, mean_reward
+    param_value = payload["param_value"]
+    mean_reward = _evaluate_params(
+        env_config,
+        params_dict,
+        episodes,
+        max_steps,
+        seed,
+        param_name,
+        delta,
+        param_value,
+    )
+    return param_name, float(param_value), float(delta), mean_reward
 
 
 def _iter_log_files(log_dir: Path) -> Iterable[Path]:
@@ -357,14 +383,15 @@ def _plot_param_result(
     out_path: Path,
     env_name: str,
     param_name: str,
-    delta_values: List[float],
+    param_values: List[float],
     rewards: List[float],
+    base_value: float,
 ) -> None:
     fig, ax = plt.subplots(figsize=(4.5, 3.5), dpi=200)
-    ax.plot(delta_values, rewards, color="#1f77b4")
-    ax.axvline(0.0, color="#999999", linewidth=1)
+    ax.plot(param_values, rewards, color="#1f77b4")
+    ax.axvline(base_value, color="#999999", linewidth=1)
     ax.set_title(f"{env_name}: {param_name}")
-    ax.set_xlabel("delta")
+    ax.set_xlabel("param value")
     ax.set_ylabel("reward")
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -394,7 +421,6 @@ def main() -> None:
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    delta_values = np.arange(-3.0, 3.0, 0.1, dtype=np.float32).tolist()
     max_steps = args.max_steps if args.max_steps > 0 else None
 
     if not log_dir.exists():
@@ -417,9 +443,16 @@ def main() -> None:
         payloads = []
         for param_name in SWEEP_PARAM_ORDER:
             base_val = float(base_params.get(param_name, 0.0))
-            for delta in delta_values:
+            distance_from_zero = abs(base_val)
+            if distance_from_zero < 1.0:
+                half_span = 2.0
+            else:
+                half_span = 2.0 * distance_from_zero
+            values = np.linspace(base_val - half_span, base_val + half_span, 41, dtype=np.float32)
+            for target_value in values:
                 params_dict = dict(base_params)
-                params_dict[param_name] = base_val + float(delta)
+                params_dict[param_name] = float(target_value)
+                delta = float(target_value - base_val)
                 payloads.append(
                     dict(
                         env_config=env_config,
@@ -428,28 +461,31 @@ def main() -> None:
                         max_steps=max_steps,
                         seed=args.seed,
                         param_name=param_name,
-                        delta=float(delta),
+                        delta=delta,
+                        param_value=float(target_value),
                     )
                 )
 
-        results: Dict[str, List[Tuple[float, float]]] = {
+        results: Dict[str, List[Tuple[float, float, float]]] = {
             name: [] for name in SWEEP_PARAM_ORDER
         }
         if args.workers <= 1:
             for payload in payloads:
-                param_name, delta, reward = _evaluate_worker(payload)
-                results[param_name].append((delta, reward))
+                param_name, value, delta, reward = _evaluate_worker(payload)
+                results[param_name].append((value, delta, reward))
         else:
             with futures.ProcessPoolExecutor(max_workers=args.workers) as ex:
                 future_map = [ex.submit(_evaluate_worker, payload) for payload in payloads]
                 for fut in futures.as_completed(future_map):
-                    param_name, delta, reward = fut.result()
-                    results[param_name].append((delta, reward))
+                    param_name, value, delta, reward = fut.result()
+                    results[param_name].append((value, delta, reward))
 
         results_by_param: Dict[str, List[float]] = {}
+        value_grid_by_param: Dict[str, List[float]] = {}
         for param_name in SWEEP_PARAM_ORDER:
             pairs = sorted(results[param_name], key=lambda x: x[0])
-            results_by_param[param_name] = [reward for _, reward in pairs]
+            value_grid_by_param[param_name] = [val for val, _, _ in pairs]
+            results_by_param[param_name] = [reward for _, _, reward in pairs]
 
         env_label = f"{map_name}_agents_{agent_num}"
         for param_name, rewards in results_by_param.items():
@@ -458,17 +494,23 @@ def main() -> None:
                 plot_path,
                 env_label,
                 param_name,
-                delta_values,
+                value_grid_by_param[param_name],
                 rewards,
+                float(base_params.get(param_name, 0.0)),
             )
 
         csv_path = out_dir / f"param_sweep_{env_label}.csv"
         with csv_path.open("w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["param", "delta", "reward_mean"])
+            writer.writerow(["param", "value", "delta", "reward_mean"])
             for param_name in SWEEP_PARAM_ORDER:
-                for delta, reward in sorted(results[param_name], key=lambda x: x[0]):
-                    writer.writerow([param_name, f"{delta:.2f}", f"{reward:.6f}"])
+                for value, delta, reward in sorted(results[param_name], key=lambda x: x[0]):
+                    writer.writerow([
+                        param_name,
+                        f"{value:.3f}",
+                        f"{delta:.2f}",
+                        f"{reward:.6f}",
+                    ])
 
         base_json_path = out_dir / f"param_sweep_{env_label}_base.json"
         base_payload = dict(base_params)

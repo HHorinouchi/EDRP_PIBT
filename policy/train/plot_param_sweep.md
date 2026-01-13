@@ -5,7 +5,8 @@
 `policy/train/sweep_results/priority_params_<map>_agents_<n>.json` を読み取り、
 各環境ごとに JSON の最善パラメータを基準値に設定し、
 `my_policy.py` で用いられている各パラメータを 1 つずつ
-`±2.5`（0.1 刻み）動かしたときの報酬平均（100 エピソード）を計算します。
+最適値を中心に 40 等分した値で評価します
+（最適値と 0 の距離が 1 以上ならその 4 倍を幅に、1 未満なら固定で ±2 の範囲）。
 
 計算は `ProcessPoolExecutor` を用いた並列処理で行われ、
 環境ごとに以下を出力します:
@@ -19,9 +20,10 @@
 
 1. `policy/train/sweep_results/logs` のログ CSV を列挙
 2. `priority_params_<map>_agents_<n>.json` を最善パラメータとして取得
-3. 各パラメータを 1 つずつ `±3.0`（0.1 刻み）でスイープ
+3. 各パラメータごとに上記ルールで生成した 51 点をスイープ
 4. 各点について 100 エピソードの平均報酬を算出
 5. パラメータごとの報酬曲線をプロットし、PNG/CSV/JSON を保存
+  （プロットの横軸はパラメータの実値）
 
 ## 使い方
 
@@ -37,7 +39,7 @@ python policy/train/plot_param_sweep.py --episodes 100 --workers 8
 python policy/train/plot_param_sweep.py \
   --logs-dir policy/train/sweep_results/logs \
   --output-dir policy/train/sweep_results/param_sweep \
-  --episodes 1000 \
+  --episodes 100 \
   --workers 32
 ```
 

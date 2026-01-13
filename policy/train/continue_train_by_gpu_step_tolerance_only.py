@@ -10,6 +10,11 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import sys
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
 
 import policy.train.continue_train_by_gpu as base
 from policy.my_policy import PriorityParams, get_priority_params
@@ -49,9 +54,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--collision-penalty", type=float, default=None)
     parser.add_argument("--max-steps", type=int, default=0)
-    parser.add_argument("--workers", type=int, default=0)
+    parser.add_argument("--workers", type=int, default=0, help="Episode rollout worker pool size (0=disable, -1=auto)")
     parser.add_argument("--candidate-workers", type=int, default=0)
-    parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--resume-from-log", action="store_true")
     parser.add_argument(
         "--output-dir",
@@ -65,7 +69,7 @@ def main() -> None:
     base.vector_to_params = _vector_to_params_step_only
 
     max_steps = args.max_steps if args.max_steps > 0 else None
-    workers = args.workers if args.workers > 0 else (os.cpu_count() or 4)
+    workers = _resolve_worker_count(args.workers)
 
     out_dir = Path(args.output_dir)
     logs_dir = out_dir / "logs"
@@ -102,11 +106,18 @@ def main() -> None:
                 max_steps=max_steps,
                 workers=workers,
                 candidate_workers=args.candidate_workers,
-                device_override=args.device,
                 verbose=False,
                 reuse_env=True,
                 resume_from_log=args.resume_from_log,
             )
+
+
+def _resolve_worker_count(arg: int) -> int:
+    if arg < 0:
+        return os.cpu_count() or 1
+    if arg == 0:
+        return 0
+    return arg
 
 
 if __name__ == "__main__":
