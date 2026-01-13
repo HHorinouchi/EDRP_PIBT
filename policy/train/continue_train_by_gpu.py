@@ -1,5 +1,5 @@
-# GPU-accelerated ES training for MAPD×PIBT priority parameters
-# - Strategy mirrors policy/train/train.py but moves ES math (noise, normalization, updates) to GPU (CUDA/MPS) via PyTorch
+# CPU-only ES training for MAPD×PIBT priority parameters
+# - Strategy mirrors policy/train/train.py but keeps ES math (noise, normalization, updates) on CPU via NumPy
 # - Environment rollouts remain Python-side (CPU). Optionally parallelized with process workers.
 
 import argparse
@@ -22,8 +22,6 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
-import torch
-
 from drp_env.drp_env import DrpEnv  # noqa: E402
 from drp_env.EE_map import UNREAL_MAP  # noqa: E402
 from policy.my_policy import (  # noqa: E402
@@ -33,85 +31,6 @@ from policy.my_policy import (  # noqa: E402
     save_priority_params,
     set_priority_params,
 )
-
-
-def _coerce_cuda_device(token: str) -> Optional[str]:
-    """Normalize various CUDA device strings to cuda:<idx>."""
-    if not torch.cuda.is_available():
-        return None
-    token = token.strip().lower()
-    if not token:
-        return None
-    if token == "cuda":
-        idx = 0
-    elif token.isdigit():
-        idx = int(token)
-    elif token.startswith("cuda:"):
-        try:
-            idx = int(token.split(":", 1)[1])
-        except (IndexError, ValueError):
-            return None
-    else:
-        return None
-    if 0 <= idx < torch.cuda.device_count():
-        return f"cuda:{idx}"
-    return None
-
-
-def _parse_device_list(device_arg: Optional[str]) -> List[str]:
-    if not device_arg:
-        return []
-    devices: List[str] = []
-    for raw in device_arg.split(","):
-        token = raw.strip()
-        if not token:
-            continue
-        lowered = token.lower()
-        if lowered in ("cpu", "mps"):
-            devices.append(lowered)
-            continue
-        coerced = _coerce_cuda_device(lowered)
-        if coerced is not None:
-            devices.append(coerced)
-        else:
-            devices.append(token)
-    return devices
-
-
-def _resolve_device(device_override: Optional[str]) -> torch.device:
-    if device_override:
-        lowered = device_override.strip().lower()
-        if lowered == "cpu":
-            return torch.device("cpu")
-        if lowered == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            return torch.device("mps")
-        coerced = _coerce_cuda_device(lowered)
-        if coerced is not None:
-            device = torch.device(coerced)
-            idx = device.index if device.index is not None else 0
-            torch.cuda.set_device(idx)
-            return torch.device(f"cuda:{idx}")
-        try:
-            device = torch.device(device_override)
-            if device.type == "cuda" and torch.cuda.is_available():
-                idx = device.index if device.index is not None else 0
-                torch.cuda.set_device(idx)
-                return torch.device(f"cuda:{idx}")
-            if device.type == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                return device
-        except Exception:
-            pass
-    if torch.cuda.is_available():
-        try:
-            idx = torch.cuda.current_device()
-        except Exception:
-            idx = 0
-        idx = int(idx)
-        torch.cuda.set_device(idx)
-        return torch.device(f"cuda:{idx}")
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
 
 
 DEFAULT_SPEED = 5.0
@@ -287,19 +206,19 @@ MAP_POOL = list(UNREAL_MAP)
 
 # Canonical sweep targets requested for batch training runs.
 SWEEP_MAP_LIST = [
-    # "map_3x3",
+    "map_3x3",
     "map_5x4",
     # "map_8x5",
     # "map_10x6",
     # "map_10x8",
     # "map_10x10",
     # "map_aoba00",
-    # "map_aoba01",
+    "map_aoba01",
     # "map_kyodai",
     # "map_osaka",
     "map_paris",
     # "map_shibuya",
-    "map_shijo",
+    # "map_shijo",
 ]
 
 def _get_map_node_count(map_name: str) -> int:
@@ -815,7 +734,7 @@ def train_priority_params_gpu(
     domain_randomize: bool = False,
     collision_penalty: Optional[float] = None,
     save_params_json: Optional[str] = None,
-    log_csv: Optional[str] = "policy/train/train_log_gpu.csv",
+    log_csv: Optional[str] = "policy/train/train_log_cpu.csv",
     plot_png: Optional[str] = None,
     clip_step_norm: float = 0.0,
     best_update_mode: str = "max",  # ["max", "mean_gap", "moving_avg"]
@@ -824,15 +743,11 @@ def train_priority_params_gpu(
     max_steps: Optional[int] = None,
     workers: int = 0,  # number of CPU processes for per-candidate episode rollouts
     candidate_workers: int = 0,  # process pool for evaluating distinct ES candidates
-    device_override: Optional[str] = None,
     verbose: bool = False,
     reuse_env: bool = True,
     resume_from_log: bool = False,
 ) -> Tuple[PriorityParams, float, List[float], List[float], str, Dict[str, float]]:
-    # Select device
-    device = _resolve_device(device_override)
-
-    torch.manual_seed(seed)
+    # CPU-only training uses NumPy for ES math
     np.random.seed(seed)
     rng = np.random.default_rng(seed)
 
@@ -876,7 +791,7 @@ def train_priority_params_gpu(
             print(f"[RESUME] No usable state found in {log_csv}; starting fresh.")
 
     dim = mean_vec_np.size
-    mean_vec = torch.tensor(mean_vec_np, device=device)
+    mean_vec = mean_vec_np.copy()
 
     skip_training = remaining_iterations <= 0
 
@@ -885,15 +800,24 @@ def train_priority_params_gpu(
         assigned_candidate_workers = max(os.cpu_count() or 1, 1)
 
     def _effective_episode_workers() -> int:
-        if workers and workers > 0:
+        # workers > 0 -> explicit process count
+        if workers is not None and workers > 0:
             return int(workers)
+        # workers == 0 disables per-episode parallelism
+        if workers == 0:
+            return 0
+        # workers < 0 enables auto mode (reuse candidate_workers or CPU cores)
+        if workers is not None and workers < 0:
+            if assigned_candidate_workers > 0:
+                return assigned_candidate_workers
+            return max(os.cpu_count() or 1, 1)
         if assigned_candidate_workers > 0:
             return assigned_candidate_workers
         return 0
 
     if not skip_training:
         base_mean, base_metrics = rollout_mean(
-            mean_vec.detach().cpu().numpy(),
+            mean_vec.copy(),
             episodes=episodes_per_candidate,
             max_steps=max_steps,
             domain_randomize=domain_randomize,
@@ -923,7 +847,7 @@ def train_priority_params_gpu(
         }
 
     best_reward = float(base_mean)
-    best_vector = mean_vec.detach().clone()
+    best_vector = mean_vec.copy()
     hist_means: List[float] = []
     hist_collision_rates: List[float] = []
     best_reward_ema = float(best_reward)
@@ -987,13 +911,13 @@ def train_priority_params_gpu(
         if not skip_training:
             for it in range(start_iteration, start_iteration + remaining_iterations):
                 # Noise: (population, dim) on device
-                noise = torch.randn((population, dim), device=device, dtype=mean_vec.dtype)
-                candidates = mean_vec.unsqueeze(0) + sigma * noise
+                noise = rng.standard_normal((population, dim), dtype=np.float32)
+                candidates = mean_vec[None, :] + sigma * noise
 
                 # Evaluate rewards for each candidate (CPU env). We must move vectors to CPU numpy
                 candidate_payloads = []
                 for idx in range(population):
-                    vec_np = candidates[idx].detach().cpu().numpy()
+                    vec_np = candidates[idx].astype(np.float32, copy=True)
                     candidate_payloads.append(
                         {
                             "params_vec": vec_np,
@@ -1025,22 +949,20 @@ def train_priority_params_gpu(
                 ]
                 mean_collision_rate = float(np.mean(collision_rates)) if collision_rates else float("nan")
 
-                # ES update on GPU
+                # ES parameter update on CPU
                 r_mean = float(rewards_np.mean())
                 r_std = float(rewards_np.std())
                 r_max = float(rewards_np.max())
-                rewards_t = torch.tensor(rewards_np, device=device, dtype=mean_vec.dtype)
-                normalized = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
-                step = (lr / (population * sigma)) * (noise.transpose(0, 1) @ normalized)  # (dim,)
+                normalized = (rewards_np - rewards_np.mean()) / (rewards_np.std() + 1e-8)
+                step = (lr / (population * sigma)) * (noise.T @ normalized)
                 if clip_step_norm and clip_step_norm > 0.0:
-                    step_norm = float(torch.linalg.vector_norm(step).item())
+                    step_norm = float(np.linalg.norm(step))
                     if step_norm > clip_step_norm:
                         step = step * (clip_step_norm / (step_norm + 1e-8))
                 # If collisions are frequent, force step_tolerance updates to move positively.
                 if dim > 6 and np.isfinite(mean_collision_rate) and mean_collision_rate >= 0.25:
-                    step[6] = step[6].abs()
-                new_mean_vec = mean_vec + step
-                mean_vec = new_mean_vec
+                    step[6] = abs(step[6])
+                mean_vec = mean_vec + step.astype(np.float32)
 
                 # Best tracking (configurable)
                 best_idx = int(np.argmax(rewards_np))
@@ -1054,7 +976,7 @@ def train_priority_params_gpu(
                     threshold = best_reward
                 if current_best > threshold:
                     best_reward = current_best
-                    best_vector = candidates[best_idx].detach().clone()
+                    best_vector = candidates[best_idx].astype(np.float32, copy=True)
 
                 # Log and history
                 best_metrics = candidate_metrics[best_idx] if candidate_metrics else {}
@@ -1064,7 +986,7 @@ def train_priority_params_gpu(
                     r_mean,
                     r_std,
                     r_max,
-                    mean_vec.detach().cpu().numpy(),
+                    mean_vec.copy(),
                     metrics=best_metrics,
                 )
                 hist_means.append(r_mean)
@@ -1073,12 +995,12 @@ def train_priority_params_gpu(
         if candidate_pool is not None:
             candidate_pool.shutdown(wait=True)
         # print(
-        #     f"[GPU-ES Iter {it:03d}] reward_mean={r_mean:.2f} reward_std={r_std:.2f} reward_max={r_max:.2f} "
-        #     f"eps={episodes_per_candidate} device={device.type}"
+    #     f"[CPU-ES Iter {it:03d}] reward_mean={r_mean:.2f} reward_std={r_std:.2f} reward_max={r_max:.2f} "
+    #     f"eps={episodes_per_candidate}"
         # )
 
     # Save best params
-    best_params = vector_to_params(best_vector.detach().cpu().numpy())
+    best_params = vector_to_params(best_vector.astype(np.float32, copy=False))
     set_priority_params(best_params)
     save_priority_params(best_params)
 
@@ -1117,10 +1039,10 @@ def train_priority_params_gpu(
 
     if not skip_training:
         _save_learning_curve(hist_means, hist_collision_rates, plot_png)
-    return best_params, float(final_score), hist_means, hist_collision_rates, device.type, final_stats
+    return best_params, float(final_score), hist_means, hist_collision_rates, "cpu", final_stats
 
 def main():
-    parser = argparse.ArgumentParser(description="GPU ES training for my_policy priority parameters (PyTorch).")
+    parser = argparse.ArgumentParser(description="CPU ES training for my_policy priority parameters (NumPy).")
     # ES hyperparams
     parser.add_argument("--iterations", type=int, default=40)
     parser.add_argument("--population", type=int, default=16)
@@ -1144,7 +1066,7 @@ def main():
         default="none",
         help="Collision penalty for an episode. Use a numeric value to overwrite episode reward on collision, or 'none' to keep per-step reward_list based rewards.",
     )
-    parser.add_argument("--log-csv", type=str, default="policy/train/train_log_gpu.csv")
+    parser.add_argument("--log-csv", type=str, default="policy/train/train_log_cpu.csv")
     parser.add_argument(
         "--plot-png",
         type=str,
@@ -1177,19 +1099,13 @@ def main():
         "--sweep-workers",
         type=int,
         default=0,
-        help="Number of concurrent sweep jobs. Defaults to the number of --gpu-devices if provided, otherwise 1.",
+        help="Number of concurrent sweep jobs when --sweep is enabled.",
     )
     parser.add_argument(
         "--sweep-plot-dir",
         type=str,
         default=None,
         help="If set, save per-run reward plots under this directory during --sweep.",
-    )
-    parser.add_argument(
-        "--gpu-devices",
-        type=str,
-        default=None,
-        help="Comma-separated device list (e.g. '0,1', 'cuda:1,cpu') to cycle across training jobs.",
     )
     parser.add_argument("--save-params-json", type=str, default=None, help="Path to save best priority params and metadata as JSON.")
     parser.add_argument("--sweep", action="store_true", help="Run sequential training across the predefined map list and agent counts.")
@@ -1206,7 +1122,6 @@ def main():
     )
     args = parser.parse_args()
 
-    device_list = _parse_device_list(args.gpu_devices)
     candidate_workers = args.candidate_workers
     if candidate_workers < 0:
         candidate_workers = max(os.cpu_count() or 1, 1)
@@ -1251,11 +1166,10 @@ def main():
         collision_penalty_val = float(-1000.0)
 
     if args.sweep:
-        run_sweep(args, collision_penalty_val, candidate_workers, device_list, sweep_plot_dir)
+        run_sweep(args, collision_penalty_val, candidate_workers, sweep_plot_dir)
         return
 
     t0 = time.time()
-    device_override = device_list[0] if device_list else None
     plot_path = _derive_plot_path(args.log_csv, args.plot_png)
     params, final_score, hist, hist_collision, device_type, final_stats = train_priority_params_gpu(
         iterations=args.iterations,
@@ -1277,13 +1191,12 @@ def main():
         max_steps=args.max_steps,
         workers=args.workers,
         candidate_workers=candidate_workers,
-        device_override=device_override,
         verbose=args.verbose_episodes,
         reuse_env=not args.disable_env_reuse,
         resume_from_log=resume_flag,
     )
 
-    print("==== Final evaluation (GPU ES) ====")
+    print("==== Final evaluation (CPU ES) ====")
     print(f"PriorityParams: {params}")
     print(f"Average episode reward (@{args.eval_episodes} episodes): {final_score:.2f}")
     if final_stats:
@@ -1299,11 +1212,11 @@ def main():
     elapsed = time.time() - t0
     print("==== Execution time ====")
     print(f"Device: {device_type}, Elapsed: {elapsed:.2f} seconds")
+
 def run_sweep(
     args,
     collision_penalty_val: Optional[float],
     candidate_workers: int,
-    device_list: List[str],
     sweep_plot_dir: Optional[Path],
 ) -> None:
     """Run training across the requested map/agent combinations (optionally in parallel)."""
@@ -1396,9 +1309,8 @@ def run_sweep(
         print("[SWEEP] No valid map/agent combinations found.")
         return
 
-    device_cycle = device_list or [None]
     requested_workers = args.sweep_workers if args.sweep_workers and args.sweep_workers > 0 else None
-    sweep_workers = requested_workers or len(device_cycle)
+    sweep_workers = requested_workers or 1
     sweep_workers = max(1, min(sweep_workers, len(tasks)))
 
     summary: List[dict] = []
@@ -1411,8 +1323,6 @@ def run_sweep(
                 ENV_CONFIG.clear()
                 ENV_CONFIG.update(task["run_config"])
                 trainer_kwargs = dict(task["trainer_kwargs"])
-                device_override = device_cycle[idx % len(device_cycle)]
-                trainer_kwargs["device_override"] = device_override
                 _, final_score, _, _, device_type, final_stats = train_priority_params_gpu(**trainer_kwargs)
                 entry = dict(task["summary_entry"])
                 entry.update(
@@ -1438,7 +1348,6 @@ def run_sweep(
                 "trainer_kwargs": dict(task["trainer_kwargs"]),
                 "summary_entry": dict(task["summary_entry"]),
                 "base_env_config": base_env_config,
-                "device_override": device_cycle[idx % len(device_cycle)],
             }
             payloads.append(payload)
 
@@ -1464,13 +1373,11 @@ def _run_sweep_job(payload: dict) -> dict:
     trainer_kwargs = dict(payload["trainer_kwargs"])
     summary_entry = dict(payload["summary_entry"])
     base_env_config = dict(payload.get("base_env_config", ENV_CONFIG))
-    device_override = payload.get("device_override")
 
     try:
         set_priority_params(PriorityParams())
         ENV_CONFIG.clear()
         ENV_CONFIG.update(run_config)
-        trainer_kwargs["device_override"] = device_override
         _, final_score, _, _, device_type, final_stats = train_priority_params_gpu(**trainer_kwargs)
     finally:
         ENV_CONFIG.clear()

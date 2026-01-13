@@ -8,5 +8,6 @@
   "assign_pick_weight": 0.7627094388008118,
   "assign_drop_weight": 0.0,
   "assign_idle_bias": -1.0,
-  "congestion_weight": 0.7265121340751648
+  "congestion_weight": 0.7265121340751648,
+  "best_reward_mean": -168.36846923828125
 }

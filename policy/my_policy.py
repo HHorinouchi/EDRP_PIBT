@@ -30,7 +30,10 @@ class PriorityParams:
     goal_weight: float = 1.0
     pick_weight: float = 1.0
     drop_weight: float = 1.0
-    step_tolerance: Optional[float] = None
+    # 初期学習値を 2.0 に設定（学習の開始時点での step_tolerance）。
+    # None の場合は速度に基づくデフォルト値が使われるが、学習開始値を
+    # 明示的に 2 にすることで ES の探索開始点を安定化させる。
+    step_tolerance: Optional[float] = 2.0
 
     # Task assignment scoring weights
     assign_pick_weight: float = 1.0
@@ -209,13 +212,26 @@ def assign_task(env):
             if dist_pick_to_drop is None:
                 dist_pick_to_drop = float("inf")
 
+            # Compute a global clustering penalty among all assigned drop nodes
+            # if this candidate task (drop_node) were assigned to this agent.
+            # We sum inverse pairwise distances between drop nodes; larger
+            # values mean more clustering. By including this term in the
+            # score (with positive assign_spread_weight), the policy will
+            # prefer assignments that reduce clustering (i.e., increase
+            # spread / dispersion of drop locations among agents).
+            targets_after = list(other_targets) + [drop_node]
             spread_penalty = 0.0
-            if other_targets:
-                for target in other_targets:
-                    dist = env.get_path_length(drop_node, target)
-                    if dist is None:
-                        continue
-                    spread_penalty += 1.0 / (float(dist) + 1.0)
+            n_targets = len(targets_after)
+            if n_targets >= 2:
+                # sum over unordered pairs
+                for a in range(n_targets):
+                    for b in range(a + 1, n_targets):
+                        t1 = targets_after[a]
+                        t2 = targets_after[b]
+                        dist = env.get_path_length(t1, t2)
+                        if dist is None:
+                            continue
+                        spread_penalty += 1.0 / (float(dist) + 1.0)
 
             score = (
                 params.assign_pick_weight * float(dist_to_pick)

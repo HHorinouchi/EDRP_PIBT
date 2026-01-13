@@ -7,9 +7,15 @@ continue_train_by_gpu.py をベースに、各エピソードで agent_num を
 import argparse
 import math
 import os
+import sys
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
 
 import policy.train.continue_train_by_gpu as base
 
@@ -42,7 +48,7 @@ def _run_for_map(map_name: str, args: argparse.Namespace) -> None:
     _sample_env_config_random_agent.random_map = False
 
     max_steps = args.max_steps if args.max_steps > 0 else None
-    workers = args.workers if args.workers > 0 else (os.cpu_count() or 4)
+    workers = _resolve_worker_count(args.workers)
 
     log_csv = args.log_csv.format(map_name=map_name)
     plot_png = None if args.plot_png is None else args.plot_png.format(map_name=map_name)
@@ -67,7 +73,6 @@ def _run_for_map(map_name: str, args: argparse.Namespace) -> None:
         max_steps=max_steps,
         workers=workers,
         candidate_workers=args.candidate_workers,
-        device_override=args.device,
         verbose=False,
         reuse_env=False,
         resume_from_log=args.resume_from_log,
@@ -84,16 +89,15 @@ def main() -> None:
     parser.add_argument("--eval-episodes", type=int, default=5)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--collision-penalty", type=float, default=None)
-    parser.add_argument("--log-csv", type=str, default="policy/train/train_log_gpu_random_agent.csv")
+    parser.add_argument("--log-csv", type=str, default="policy/train/train_log_cpu_random_agent.csv")
     parser.add_argument("--plot-png", type=str, default=None)
     parser.add_argument("--clip-step-norm", type=float, default=0.0)
     parser.add_argument("--best-update-mode", type=str, default="max")
     parser.add_argument("--best-update-alpha", type=float, default=0.1)
     parser.add_argument("--best-update-gap", type=float, default=0.0)
     parser.add_argument("--max-steps", type=int, default=0)
-    parser.add_argument("--workers", type=int, default=0)
+    parser.add_argument("--workers", type=int, default=0, help="Episode rollout worker pool size (0=disable, -1=auto)")
     parser.add_argument("--candidate-workers", type=int, default=0)
-    parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--resume-from-log", action="store_true")
     parser.add_argument("--map-name", type=str, default=None)
     parser.add_argument("--random-map", action="store_true")
@@ -115,7 +119,7 @@ def main() -> None:
     _sample_env_config_random_agent.random_map = bool(args.random_map)
 
     max_steps = args.max_steps if args.max_steps > 0 else None
-    workers = args.workers if args.workers > 0 else (os.cpu_count() or 4)
+    workers = _resolve_worker_count(args.workers)
 
     base.train_priority_params_gpu(
         iterations=args.iterations,
@@ -137,11 +141,17 @@ def main() -> None:
         max_steps=max_steps,
         workers=workers,
         candidate_workers=args.candidate_workers,
-        device_override=args.device,
         verbose=False,
         reuse_env=False,
         resume_from_log=args.resume_from_log,
     )
+
+def _resolve_worker_count(arg: int) -> int:
+    if arg < 0:
+        return os.cpu_count() or 1
+    if arg == 0:
+        return 0
+    return arg
 
 
 if __name__ == "__main__":
