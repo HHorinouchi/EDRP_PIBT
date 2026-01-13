@@ -305,7 +305,7 @@ def detect_actions(env):
     row_avail_actions_list = copy.deepcopy(avail_actions_list)
     # エッジ上のエージェントについては先にエッジの占有をしておく
     for agent_id in range(env.agent_num):
-        if len(row_avail_actions_list[agent_id]) == max_wait+1: # これは、エッジ上にいるとき
+        if len(row_avail_actions_list[agent_id]) == 2: # これは、エッジ上にいるとき
             next_node = row_avail_actions_list[agent_id][0]  # エッジ上にいるときは進行方向のノードにしか行けない
             needed_step = calculate_steps_to_node(env, agent_id, next_node)
             occupied_edges[agent_id] = (env.current_start[agent_id], next_node, needed_step)
@@ -374,10 +374,10 @@ def detect_actions(env):
                     release_node = needed_step + wait_steps   # needed_step はノード到達までのステップ (待機なら0)
                     # エージェントがcurrent_start[agent_idx]との距離がenv.speed以下の場合、停止している間もそのノードを占有し続ける
                     distance_to_current = calculate_steps_to_node(env, agent_idx, env.current_start[agent_idx])
-                    if distance_to_current <= 5/speed + 1:
+                    if distance_to_current <= step_tolerance/2:
                         occupied_nodes[agent_idx] = (env.current_start[agent_idx], distance_to_current + wait_steps)
                     # エージェントがnext_nodeとの距離がenv.speed以下の場合、停止している間もそのノードを占有し続ける
-                    elif calculate_steps_to_node(env, agent_idx, next_node) <= 5/speed + 1:
+                    elif calculate_steps_to_node(env, agent_idx, next_node) <= step_tolerance/2:
                         occupied_nodes[agent_idx] = (next_node, release_node)
                     else:
                         occupied_nodes[agent_idx] = (None, None)
@@ -432,9 +432,9 @@ def detect_actions(env):
                 # ノードの占有状況を更新
                 # current_startノード、next_nodeからの距離がenv.speed以下の場合、そのノードを停止している間も占有し続ける
                 distance_to_current = calculate_steps_to_node(env, agent_idx, env.current_start[agent_idx])
-                if distance_to_current <= 5/speed + 1:
+                if distance_to_current <= step_tolerance/2:
                     occupied_nodes[agent_idx] = (env.current_start[agent_idx], distance_to_current + max_wait)
-                elif calculate_steps_to_node(env, agent_idx, next_node) <= 5/speed + 1:
+                elif calculate_steps_to_node(env, agent_idx, next_node) <= step_tolerance/2:
                     occupied_nodes[agent_idx] = (next_node, max_wait)
                 # エッジの占有状況を更新
                 # エージェントがエッジ上にいる場合、現在ノードから次ノードへのエッジを占有
