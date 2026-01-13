@@ -9,7 +9,7 @@ goal_array = []
 visu_delay = 0.3
 reward_list = {"goal": 100, "collision": -10, "wait": -10, "move": -1}
 
-time_limit = 100000
+time_limit = 1000
 collision = "terminated"
 
 map_list = [

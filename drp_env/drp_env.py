@@ -84,7 +84,7 @@ class DrpEnv(gym.Env):
 		self.current_tasklist=[]
 		self.assigned_tasks=[]#エージェントが割り当てられたタスク(未ピックを含む)
 		self.assigned_list=[]#未実行のタスクとエージェントの割り当て表
-		self.task_num = self.agent_num*2 # for tasklist, each agent can have 2 tasks at most
+		self.task_num = self.agent_num  # keep a fixed pool size per step
 		#for rendering
 		if self.is_tasklist:
 			self.taskgui=GUI_tasklist()
@@ -355,7 +355,13 @@ class DrpEnv(gym.Env):
 			#obs = self.obs_manager.calc_obs()
 
 		if self.is_tasklist:
-			while len(self.current_tasklist) < self.task_num and self.next_task_idx < len(self.alltasks_flat):
+			def _append_task() -> None:
+				new_task = self.ee_env.create_task(self.time_limit)
+				self.alltasks_flat.append(new_task)
+
+			while len(self.current_tasklist) < self.task_num:
+				if self.next_task_idx >= len(self.alltasks_flat):
+					_append_task()
 				self.current_tasklist.append(self.alltasks_flat[self.next_task_idx])
 				self.assigned_list.append(-1) # -1 means unassigned
 				self.next_task_idx += 1
@@ -407,7 +413,9 @@ class DrpEnv(gym.Env):
 				self.obs_onehot[i][int(self.goal_array[i])+len(list(self.G.nodes()))] = 1
 
 			self.obs = tuple([np.array(i) for i in self.obs_prepare])
-			while len(self.current_tasklist) < self.task_num and self.next_task_idx < len(self.alltasks_flat):
+			while len(self.current_tasklist) < self.task_num:
+				if self.next_task_idx >= len(self.alltasks_flat):
+					_append_task()
 				self.current_tasklist.append(self.alltasks_flat[self.next_task_idx])
 				self.assigned_list.append(-1) # -1 means unassigned
 				self.next_task_idx += 1
