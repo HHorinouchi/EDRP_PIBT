@@ -20,7 +20,7 @@ Example commands:
 #   --population 32 \
 #   --episodes-per-candidate 20 \
 #   --eval-episodes 20 \
-#   --candidate-workers 8 \
+#   --candidate-workers 16 \
 #   --workers 0 \
 #   --output-dir policy/train/three_stage
 """
@@ -271,6 +271,7 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--episodes-per-candidate", type=int, default=5)
     parser.add_argument("--eval-episodes", type=int, default=5)
+    parser.add_argument("--clip-step-norm", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--collision-penalty", type=float, default=None)
     parser.add_argument("--max-steps", type=int, default=0)
