@@ -34,7 +34,9 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
 import policy.train.continue_train_by_gpu as base
 from policy.my_policy import PriorityParams, get_priority_params, set_priority_params
 
