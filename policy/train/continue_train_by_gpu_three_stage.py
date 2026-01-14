@@ -32,6 +32,7 @@ import os
 import time
 from pathlib import Path
 from typing import Optional
+import sys
 
 import numpy as np
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -272,6 +273,9 @@ def main() -> None:
     parser.add_argument("--episodes-per-candidate", type=int, default=5)
     parser.add_argument("--eval-episodes", type=int, default=5)
     parser.add_argument("--clip-step-norm", type=float, default=0.0)
+    parser.add_argument("--best-update-mode", type=str, default="max")
+    parser.add_argument("--best-update-alpha", type=float, default=0.1)
+    parser.add_argument("--best-update-gap", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--collision-penalty", type=float, default=None)
     parser.add_argument("--max-steps", type=int, default=0)
