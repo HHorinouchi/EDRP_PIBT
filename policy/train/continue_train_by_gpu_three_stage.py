@@ -159,49 +159,16 @@ def _run_stage(
     workers = args.workers if args.workers > 0 else (os.cpu_count() or 4)
 
     start_time = time.time()
-    total_iterations = max_iterations if max_iterations is not None else args.iterations
+    total_iterations = int(max_iterations if max_iterations is not None else args.iterations)
     patience = 0
     best_params = None
     hist_means = []
     hist_collision = []
     actual_iterations = 0
-    for it in range(int(total_iterations)):
+
+    if early_stop_collision is None:
         best_params, _, hist_means, hist_collision, _, _ = base.train_priority_params_gpu(
-            iterations=1,
-            population=args.population,
-            sigma=args.sigma,
-            lr=args.lr,
-            episodes_per_candidate=args.episodes_per_candidate,
-            eval_episodes=args.eval_episodes,
-            seed=args.seed + it,
-            domain_randomize=args.domain_randomize,
-            collision_penalty=args.collision_penalty,
-            save_params_json=None,
-            log_csv=str(log_csv),
-            plot_png=str(plot_png) if plot_png is not None else None,
-            clip_step_norm=args.clip_step_norm,
-            best_update_mode=args.best_update_mode,
-            best_update_alpha=args.best_update_alpha,
-            best_update_gap=args.best_update_gap,
-            max_steps=max_steps,
-            workers=workers,
-            candidate_workers=args.candidate_workers,
-            verbose=False,
-            reuse_env=False,
-            resume_from_log=True,
-        )
-        actual_iterations += 1
-        if early_stop_collision is not None and hist_collision:
-            last_coll = hist_collision[-1]
-            if np.isfinite(last_coll) and last_coll < early_stop_collision:
-                patience += 1
-            else:
-                patience = 0
-            if patience >= max(early_stop_patience, 1):
-                break
-    if best_params is None:
-        best_params, _, _, _, _, _ = base.train_priority_params_gpu(
-            iterations=1,
+            iterations=total_iterations,
             population=args.population,
             sigma=args.sigma,
             lr=args.lr,
@@ -222,8 +189,71 @@ def _run_stage(
             candidate_workers=args.candidate_workers,
             verbose=False,
             reuse_env=False,
-            resume_from_log=True,
+            resume_from_log=args.resume_from_log,
         )
+        actual_iterations = total_iterations
+    else:
+        for it in range(total_iterations):
+            target_iterations = it + 1
+            best_params, _, hist_means, hist_collision, _, _ = base.train_priority_params_gpu(
+                iterations=target_iterations,
+                population=args.population,
+                sigma=args.sigma,
+                lr=args.lr,
+                episodes_per_candidate=args.episodes_per_candidate,
+                eval_episodes=args.eval_episodes,
+                seed=args.seed,
+                domain_randomize=args.domain_randomize,
+                collision_penalty=args.collision_penalty,
+                save_params_json=None,
+                log_csv=str(log_csv),
+                plot_png=str(plot_png) if plot_png is not None else None,
+                clip_step_norm=args.clip_step_norm,
+                best_update_mode=args.best_update_mode,
+                best_update_alpha=args.best_update_alpha,
+                best_update_gap=args.best_update_gap,
+                max_steps=max_steps,
+                workers=workers,
+                candidate_workers=args.candidate_workers,
+                verbose=False,
+                reuse_env=False,
+                resume_from_log=True,
+            )
+            actual_iterations = target_iterations
+            if hist_collision:
+                last_coll = hist_collision[-1]
+                if np.isfinite(last_coll) and last_coll < early_stop_collision:
+                    patience += 1
+                else:
+                    patience = 0
+                if patience >= max(early_stop_patience, 1):
+                    break
+        if best_params is None:
+            best_params, _, _, _, _, _ = base.train_priority_params_gpu(
+                iterations=1,
+                population=args.population,
+                sigma=args.sigma,
+                lr=args.lr,
+                episodes_per_candidate=args.episodes_per_candidate,
+                eval_episodes=args.eval_episodes,
+                seed=args.seed,
+                domain_randomize=args.domain_randomize,
+                collision_penalty=args.collision_penalty,
+                save_params_json=None,
+                log_csv=str(log_csv),
+                plot_png=str(plot_png) if plot_png is not None else None,
+                clip_step_norm=args.clip_step_norm,
+                best_update_mode=args.best_update_mode,
+                best_update_alpha=args.best_update_alpha,
+                best_update_gap=args.best_update_gap,
+                max_steps=max_steps,
+                workers=workers,
+                candidate_workers=args.candidate_workers,
+                verbose=False,
+                reuse_env=False,
+                resume_from_log=True,
+            )
+            actual_iterations = 1
     elapsed = time.time() - start_time
     actual_iterations = max(int(actual_iterations), 1)
     total_rollouts = int(actual_iterations) * int(args.population) * int(args.episodes_per_candidate)
@@ -266,7 +296,7 @@ def main() -> None:
     parser.add_argument("--agent-num", type=int, default=10)
     parser.add_argument("--stage3-ratios", type=str, default="0.25,0.5")
     parser.add_argument("--sweep-maps", action="store_true")
-    parser.add_argument("--iterations", type=int, default=80)
+    parser.add_argument("--iterations", type=int, default=100)
     parser.add_argument("--population", type=int, default=16)
     parser.add_argument("--sigma", type=float, default=0.1)
     parser.add_argument("--lr", type=float, default=0.05)
@@ -328,7 +358,7 @@ def main() -> None:
             logs_dir / "train_log_stage1_step_tolerance.csv",
             plots_dir / "reward_stage1_step_tolerance.png",
             logs_dir / "stage1_step_tolerance_params.json",
-            max_iterations=150,
+            max_iterations=100,
             early_stop_collision=0.1,
             early_stop_patience=10,
         )
