@@ -13,16 +13,16 @@ Example commands:
 #   --stage3-ratios 0.25,0.5 \
 #   --output-dir policy/train/three_stage
 #
-# python policy/train/continue_train_by_gpu_three_stage.py \
-#   --sweep-maps \
-#   --stage3-ratios 0.25,0.5 \
-#   --iterations 100 \
-#   --population 32 \
-#   --episodes-per-candidate 20 \
-#   --eval-episodes 20 \
-#   --candidate-workers 16 \
-#   --workers 0 \
-#   --output-dir policy/train/three_stage
+python policy/train/continue_train_by_gpu_three_stage.py \
+  --sweep-maps \
+  --stage3-ratios 0.25,0.5 \
+  --iterations 100 \
+  --population 32 \
+  --episodes-per-candidate 20 \
+  --eval-episodes 20 \
+  --candidate-workers 16 \
+  --workers 4 \
+  --output-dir policy/train/three_stage
 """
 
 import argparse
@@ -164,6 +164,7 @@ def _run_stage(
     best_params = None
     hist_means = []
     hist_collision = []
+    actual_iterations = 0
     for it in range(int(total_iterations)):
         best_params, _, hist_means, hist_collision, _, _ = base.train_priority_params_gpu(
             iterations=1,
@@ -189,6 +190,7 @@ def _run_stage(
             reuse_env=False,
             resume_from_log=True,
         )
+        actual_iterations += 1
         if early_stop_collision is not None and hist_collision:
             last_coll = hist_collision[-1]
             if np.isfinite(last_coll) and last_coll < early_stop_collision:
@@ -223,7 +225,7 @@ def _run_stage(
             resume_from_log=True,
         )
     elapsed = time.time() - start_time
-    actual_iterations = max(len(hist_means), 1)
+    actual_iterations = max(int(actual_iterations), 1)
     total_rollouts = int(actual_iterations) * int(args.population) * int(args.episodes_per_candidate)
     if save_json is not None:
         payload = {
