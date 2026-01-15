@@ -507,7 +507,7 @@ def rollout_once(
         penalty_term = (r_coll * speed) * scale
     elif timeup_triggered:
         penalty_reason = "timeup"
-        penalty_term = (r_coll * speed)
+        # penalty_term = (r_coll * speed)
     final_reward = goal_reward + step_penalty + penalty_term
     if collision_penalty is not None and penalty_reason is not None:
         final_reward += float(collision_penalty)
