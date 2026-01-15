@@ -751,8 +751,10 @@ def train_priority_params_gpu(
     np.random.seed(seed)
     rng = np.random.default_rng(seed)
 
-    # Initialize vector from saved params
-    mean_vec_np = params_to_vector(get_priority_params()).astype(np.float32)
+    # Initialize vector from default PriorityParams (ignore file-loaded params for training starts).
+    base_params = PriorityParams()
+    set_priority_params(base_params)
+    mean_vec_np = params_to_vector(base_params).astype(np.float32)
     start_iteration = 1
     total_completed_iters = 0
     remaining_iterations = iterations
