@@ -19,9 +19,9 @@ python policy/train/continue_train_by_gpu_three_stage.py \
   --iterations 100 \
   --population 32 \
   --episodes-per-candidate 20 \
-  --eval-episodes 20 \
+  --eval-episodes 32 \
   --candidate-workers 16 \
-  --workers 4 \
+  --workers 1 \
   --output-dir policy/train/three_stage
 """
 
@@ -359,8 +359,6 @@ def main() -> None:
             plots_dir / "reward_stage1_step_tolerance.png",
             logs_dir / "stage1_step_tolerance_params.json",
             max_iterations=100,
-            early_stop_collision=0.1,
-            early_stop_patience=10,
         )
 
         # Stage 2: pick/drop only, agent_num random in [5, 10]
