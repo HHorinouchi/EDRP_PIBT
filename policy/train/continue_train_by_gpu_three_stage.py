@@ -134,9 +134,11 @@ def _vector_to_params_stage3(vec: np.ndarray) -> PriorityParams:
 def _sample_env_config_agent_range(rng: np.random.Generator) -> dict:
     map_name = base.ENV_CONFIG.get("map_name", "map_shibuya")
     n_nodes = base._get_map_node_count(map_name) or 0
-    min_agents = 5
-    max_agents = 10
+    min_agents = 2
+    max_agents = 2
     if n_nodes > 0:
+        min_agents = max(2, int(math.floor(n_nodes * 0.25)))
+        max_agents = max(2, int(math.floor(n_nodes * 0.33)))
         max_agents = min(max_agents, max(2, n_nodes - 1))
         min_agents = min(min_agents, max_agents)
     agent_num = int(rng.integers(min_agents, max_agents + 1))
