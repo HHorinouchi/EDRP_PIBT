@@ -747,6 +747,8 @@ def train_priority_params_gpu(
     reuse_env: bool = True,
     resume_from_log: bool = False,
     use_default_init: bool = True,
+    step_tolerance_index: Optional[int] = 6,
+    step_tolerance_positive_collision: float = 0.25,
 ) -> Tuple[PriorityParams, float, List[float], List[float], str, Dict[str, float]]:
     # CPU-only training uses NumPy for ES math
     np.random.seed(seed)
@@ -966,8 +968,13 @@ def train_priority_params_gpu(
                     if step_norm > clip_step_norm:
                         step = step * (clip_step_norm / (step_norm + 1e-8))
                 # If collisions are frequent, force step_tolerance updates to move positively.
-                if dim > 6 and np.isfinite(mean_collision_rate) and mean_collision_rate >= 0.25:
-                    step[6] = abs(step[6])
+                if (
+                    step_tolerance_index is not None
+                    and 0 <= int(step_tolerance_index) < dim
+                    and np.isfinite(mean_collision_rate)
+                    and mean_collision_rate >= float(step_tolerance_positive_collision)
+                ):
+                    step[int(step_tolerance_index)] = abs(step[int(step_tolerance_index)])
                 mean_vec = mean_vec + step.astype(np.float32)
 
                 # Best tracking (configurable)

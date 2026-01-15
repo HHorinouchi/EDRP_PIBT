@@ -154,9 +154,12 @@ def _run_stage(
     max_iterations: Optional[int] = None,
     early_stop_collision: Optional[float] = None,
     early_stop_patience: int = 0,
+    use_default_init: bool = True,
+    step_tolerance_index: Optional[int] = 0,
 ) -> PriorityParams:
     max_steps = args.max_steps if args.max_steps > 0 else None
     workers = args.workers if args.workers > 0 else (os.cpu_count() or 4)
+    resume_from_log = args.resume_from_log or log_csv.exists()
 
     start_time = time.time()
     total_iterations = int(max_iterations if max_iterations is not None else args.iterations)
@@ -189,11 +192,14 @@ def _run_stage(
             candidate_workers=args.candidate_workers,
             verbose=False,
             reuse_env=False,
-            resume_from_log=args.resume_from_log,
+            resume_from_log=resume_from_log,
+            use_default_init=use_default_init,
+            step_tolerance_index=step_tolerance_index,
         )
         actual_iterations = total_iterations
     else:
         for it in range(total_iterations):
+            resume_from_log = args.resume_from_log or log_csv.exists()
             target_iterations = it + 1
             best_params, _, hist_means, hist_collision, _, _ = base.train_priority_params_gpu(
                 iterations=target_iterations,
@@ -217,7 +223,9 @@ def _run_stage(
                 candidate_workers=args.candidate_workers,
                 verbose=False,
                 reuse_env=False,
-                resume_from_log=True,
+                resume_from_log=resume_from_log,
+                use_default_init=use_default_init,
+                step_tolerance_index=step_tolerance_index,
             )
             actual_iterations = target_iterations
             if hist_collision:
@@ -229,6 +237,7 @@ def _run_stage(
                 if patience >= max(early_stop_patience, 1):
                     break
         if best_params is None:
+            resume_from_log = args.resume_from_log or log_csv.exists()
             best_params, _, _, _, _, _ = base.train_priority_params_gpu(
                 iterations=1,
                 population=args.population,
@@ -251,7 +260,9 @@ def _run_stage(
                 candidate_workers=args.candidate_workers,
                 verbose=False,
                 reuse_env=False,
-                resume_from_log=True,
+                resume_from_log=resume_from_log,
+                use_default_init=use_default_init,
+                step_tolerance_index=step_tolerance_index,
             )
             actual_iterations = 1
     elapsed = time.time() - start_time
@@ -361,6 +372,8 @@ def main() -> None:
             max_iterations=150,
             early_stop_collision=0.1,
             early_stop_patience=5,
+            use_default_init=True,
+            step_tolerance_index=0,
         )
 
         # Stage 2: pick/drop only, agent_num random in [5, 10]
@@ -375,6 +388,8 @@ def main() -> None:
             plots_dir / "reward_stage2_pick_drop.png",
             logs_dir / "stage2_pick_drop_params.json",
             max_iterations=100,
+            use_default_init=False,
+            step_tolerance_index=None,
         )
 
         # Stage 3: step_tolerance, assign_pick_weight, goal_weight (agent_num ratios)
@@ -393,6 +408,8 @@ def main() -> None:
                 plots_dir / f"reward_stage3_step_assign_goal_{ratio_tag}.png",
                 logs_dir / f"stage3_step_assign_goal_{ratio_tag}_params.json",
                 max_iterations=100,
+                use_default_init=False,
+                step_tolerance_index=0,
             )
 
 
