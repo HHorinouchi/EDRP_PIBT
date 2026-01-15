@@ -358,7 +358,9 @@ def main() -> None:
             logs_dir / "train_log_stage1_step_tolerance.csv",
             plots_dir / "reward_stage1_step_tolerance.png",
             logs_dir / "stage1_step_tolerance_params.json",
-            max_iterations=100,
+            max_iterations=150,
+            early_stop_collision=0.1,
+            early_stop_patience=5,
         )
 
         # Stage 2: pick/drop only, agent_num random in [5, 10]
