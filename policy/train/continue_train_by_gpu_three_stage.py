@@ -365,7 +365,7 @@ def main() -> None:
         base.vector_to_params = _vector_to_params_step_only
         base.sample_env_config = _sample_env_config_agent_range
         args.domain_randomize = True
-        _run_stage(
+        stage1_params = _run_stage(
             "stage1_step_tolerance",
             args,
             logs_dir / "train_log_stage1_step_tolerance.csv",
@@ -383,7 +383,7 @@ def main() -> None:
         base.vector_to_params = _vector_to_params_pick_drop
         base.sample_env_config = _sample_env_config_agent_range
         args.domain_randomize = True
-        _run_stage(
+        stage2_params = _run_stage(
             "stage2_pick_drop",
             args,
             logs_dir / "train_log_stage2_pick_drop.csv",
@@ -403,6 +403,18 @@ def main() -> None:
             base.ENV_CONFIG["agent_num"] = _agent_num_from_ratio(map_name, ratio)
             base.ENV_CONFIG = base._normalized_env_config(base.ENV_CONFIG)
             ratio_tag = f"{ratio:.2f}".replace(".", "p")
+            if stage1_params is not None and stage2_params is not None:
+                start_params = PriorityParams(
+                    goal_weight=float(getattr(stage2_params, "goal_weight", 1.0)),
+                    pick_weight=float(getattr(stage2_params, "pick_weight", 1.0)),
+                    drop_weight=float(getattr(stage2_params, "drop_weight", 1.0)),
+                    assign_pick_weight=float(getattr(stage2_params, "assign_pick_weight", 1.0)),
+                    assign_drop_weight=float(getattr(stage2_params, "assign_drop_weight", 1.0)),
+                    congestion_weight=float(getattr(stage2_params, "congestion_weight", 0.0)),
+                    assign_spread_weight=float(getattr(stage2_params, "assign_spread_weight", 1.0)),
+                    step_tolerance=float(getattr(stage1_params, "step_tolerance", 0.0)),
+                )
+                set_priority_params(start_params)
             _run_stage(
                 f"stage3_step_assign_goal_ratio_{ratio_tag}",
                 args,
