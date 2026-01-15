@@ -154,11 +154,9 @@ def _run_stage(
     max_iterations: Optional[int] = None,
     early_stop_collision: Optional[float] = None,
     early_stop_patience: int = 0,
-    use_default_init: bool = True,
 ) -> PriorityParams:
     max_steps = args.max_steps if args.max_steps > 0 else None
     workers = args.workers if args.workers > 0 else (os.cpu_count() or 4)
-    resume_from_log = args.resume_from_log or log_csv.exists()
 
     start_time = time.time()
     total_iterations = int(max_iterations if max_iterations is not None else args.iterations)
@@ -191,8 +189,7 @@ def _run_stage(
             candidate_workers=args.candidate_workers,
             verbose=False,
             reuse_env=False,
-            resume_from_log=resume_from_log,
-            use_default_init=use_default_init,
+            resume_from_log=args.resume_from_log,
         )
         actual_iterations = total_iterations
     else:
@@ -220,8 +217,7 @@ def _run_stage(
                 candidate_workers=args.candidate_workers,
                 verbose=False,
                 reuse_env=False,
-                resume_from_log=resume_from_log,
-                use_default_init=use_default_init,
+                resume_from_log=True,
             )
             actual_iterations = target_iterations
             if hist_collision:
@@ -255,8 +251,7 @@ def _run_stage(
                 candidate_workers=args.candidate_workers,
                 verbose=False,
                 reuse_env=False,
-                resume_from_log=resume_from_log,
-                use_default_init=use_default_init,
+                resume_from_log=True,
             )
             actual_iterations = 1
     elapsed = time.time() - start_time
@@ -301,7 +296,7 @@ def main() -> None:
     parser.add_argument("--agent-num", type=int, default=10)
     parser.add_argument("--stage3-ratios", type=str, default="0.25,0.5")
     parser.add_argument("--sweep-maps", action="store_true")
-    parser.add_argument("--iterations", type=int, default=100)
+    parser.add_argument("--iterations", type=int, default=150)
     parser.add_argument("--population", type=int, default=16)
     parser.add_argument("--sigma", type=float, default=0.1)
     parser.add_argument("--lr", type=float, default=0.05)
@@ -366,7 +361,6 @@ def main() -> None:
             max_iterations=150,
             early_stop_collision=0.1,
             early_stop_patience=5,
-            use_default_init=True,
         )
 
         # Stage 2: pick/drop only, agent_num random in [5, 10]
@@ -381,7 +375,6 @@ def main() -> None:
             plots_dir / "reward_stage2_pick_drop.png",
             logs_dir / "stage2_pick_drop_params.json",
             max_iterations=100,
-            use_default_init=False,
         )
 
         # Stage 3: step_tolerance, assign_pick_weight, goal_weight (agent_num ratios)
@@ -400,7 +393,6 @@ def main() -> None:
                 plots_dir / f"reward_stage3_step_assign_goal_{ratio_tag}.png",
                 logs_dir / f"stage3_step_assign_goal_{ratio_tag}_params.json",
                 max_iterations=100,
-                use_default_init=False,
             )
 
 
