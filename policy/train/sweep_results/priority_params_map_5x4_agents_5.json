@@ -1,10 +1,10 @@
 {
-  "goal_weight": 1.415854573249817,
-  "pick_weight": 0.06265808641910553,
-  "drop_weight": 0.0,
-  "step_tolerance": 3.6162662506103516,
-  "assign_pick_weight": 0.6397756338119507,
+  "goal_weight": 1.677588701248169,
+  "pick_weight": 1.8269994258880615,
+  "drop_weight": 0.2943434715270996,
+  "step_tolerance": 4.935096263885498,
+  "assign_pick_weight": 2.0988879203796387,
   "assign_drop_weight": 0.0,
-  "congestion_weight": -1.0182483196258545,
-  "assign_spread_weight": -1.9957622289657593
+  "congestion_weight": -0.30159127712249756,
+  "assign_spread_weight": 0.7249723672866821
 }

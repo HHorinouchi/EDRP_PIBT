@@ -1,0 +1,2 @@
+iter,reward_mean,reward_std,reward_max,best_goal_rate,best_collision_rate,best_timeup_rate,best_avg_steps,best_avg_task_completion,v0
+1,-944.0419311523438,26.48949432373047,-899.9503784179688,0.0,0.699999988079071,0.30000001192092896,321.70001220703125,15.5,13.342537879943848

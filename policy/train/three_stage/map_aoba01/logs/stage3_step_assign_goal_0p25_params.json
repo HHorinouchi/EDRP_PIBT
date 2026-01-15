@@ -1,0 +1,18 @@
+{
+  "stage": "stage3_step_assign_goal_ratio_0p25",
+  "params": {
+    "goal_weight": 1.6477521657943726,
+    "pick_weight": 0.3691066801548004,
+    "drop_weight": 0.11286190897226334,
+    "assign_pick_weight": 1.2439168691635132,
+    "assign_drop_weight": 0.0,
+    "congestion_weight": -1.6456702947616577,
+    "assign_spread_weight": 0.7223836779594421,
+    "step_tolerance": 13.302772521972656
+  },
+  "training_time_seconds": 0.02798318862915039,
+  "rollout_count": 64000,
+  "episodes_per_candidate": 20,
+  "iterations": 100,
+  "population": 32
+}
