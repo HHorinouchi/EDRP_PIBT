@@ -108,9 +108,9 @@ def _compute_time_limit(
 
     diagonal = width + height
     if diagonal <= 0.0:
-        return 100
+        return 300
 
-    time_limit = 100
+    time_limit = 300
     # print(f"Map name: {map_name}, dimensions: width={width:.2f}, height={height:.2f}")
     # print(f"Computed time limit: diagonal={diagonal:.2f}, speed={speed_val:.2f} -> time_limit={time_limit:.2f}")
     return max(int(math.ceil(time_limit)), 1)
@@ -206,8 +206,8 @@ MAP_POOL = list(UNREAL_MAP)
 
 # Canonical sweep targets requested for batch training runs.
 SWEEP_MAP_LIST = [
-    "map_3x3",
-    "map_5x4",
+    # "map_3x3",
+    # "map_5x4",
     # "map_8x5",
     # "map_10x6",
     # "map_10x8",
