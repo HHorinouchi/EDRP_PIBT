@@ -104,13 +104,13 @@ def _compute_time_limit(
 
     width, height = _get_map_dimensions(map_name)
     if width <= 0.0 and height <= 0.0:
-        return 200
+        return 100
 
     diagonal = width + height
     if diagonal <= 0.0:
-        return 200
+        return 100
 
-    time_limit = diagonal * 6.0 / speed_val
+    time_limit = 100
     # print(f"Map name: {map_name}, dimensions: width={width:.2f}, height={height:.2f}")
     # print(f"Computed time limit: diagonal={diagonal:.2f}, speed={speed_val:.2f} -> time_limit={time_limit:.2f}")
     return max(int(math.ceil(time_limit)), 1)
@@ -247,7 +247,7 @@ def _agent_counts_for_map(map_name: str) -> List[int]:
     n_nodes = _get_map_node_count(map_name)
     if n_nodes <= 0:
         return []
-    ratios = (0.25, 0.5)    # エージェント数の設定（マップのノード数との割合）
+    ratios = (0.25, 0.4, 0.5)    # エージェント数の設定（マップのノード数との割合）
     counts = set()
     for ratio in ratios:
         value = int(math.floor(n_nodes * ratio))
@@ -350,7 +350,7 @@ def params_to_vector(params: PriorityParams) -> np.ndarray:
             params.assign_drop_weight,
             params.congestion_weight,
             _current_step_tolerance_value(params),
-            float(getattr(params, "assign_spread_weight", 1.0)),
+            # float(getattr(params, "assign_spread_weight", 1.0)),
         ],
         dtype=np.float32,
     )

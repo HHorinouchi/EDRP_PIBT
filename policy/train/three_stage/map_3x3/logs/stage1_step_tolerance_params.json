@@ -1,18 +1,18 @@
 {
   "stage": "stage1_step_tolerance",
   "params": {
-    "goal_weight": 1.708382487297058,
-    "pick_weight": 0.40027526021003723,
-    "drop_weight": 0.36751025915145874,
-    "assign_pick_weight": 1.1413416862487793,
-    "assign_drop_weight": 0.0,
-    "congestion_weight": -1.6456702947616577,
-    "assign_spread_weight": 0.7223836779594421,
-    "step_tolerance": 13.264086723327637
+    "goal_weight": 1.0,
+    "pick_weight": 1.0,
+    "drop_weight": 1.0,
+    "assign_pick_weight": 1.0,
+    "assign_drop_weight": 1.0,
+    "congestion_weight": -1.0,
+    "assign_spread_weight": 1.0,
+    "step_tolerance": 3.1044270992279053
   },
-  "training_time_seconds": 0.039766550064086914,
-  "rollout_count": 96000,
+  "training_time_seconds": 51.22179365158081,
+  "rollout_count": 12800,
   "episodes_per_candidate": 20,
-  "iterations": 150,
+  "iterations": 20,
   "population": 32
 }

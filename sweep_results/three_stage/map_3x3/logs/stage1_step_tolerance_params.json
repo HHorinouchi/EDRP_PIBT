@@ -1,0 +1,18 @@
+{
+  "stage": "stage1_step_tolerance",
+  "params": {
+    "goal_weight": 1.0,
+    "pick_weight": 1.0,
+    "drop_weight": 1.0,
+    "assign_pick_weight": 1.0,
+    "assign_drop_weight": 1.0,
+    "congestion_weight": -1.0,
+    "assign_spread_weight": 1.0,
+    "step_tolerance": 3.247797727584839
+  },
+  "training_time_seconds": 46.587878942489624,
+  "rollout_count": 11520,
+  "episodes_per_candidate": 20,
+  "iterations": 18,
+  "population": 32
+}

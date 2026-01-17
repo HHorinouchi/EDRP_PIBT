@@ -19,9 +19,9 @@ python policy/train/continue_train_by_gpu_three_stage.py \
   --iterations 100 \
   --population 32 \
   --episodes-per-candidate 20 \
-  --eval-episodes 32 \
+  --eval-episodes 20 \
   --candidate-workers 16 \
-  --workers 1 \
+  --workers 0 \
   --output-dir policy/train/three_stage
 """
 
@@ -134,11 +134,9 @@ def _vector_to_params_stage3(vec: np.ndarray) -> PriorityParams:
 def _sample_env_config_agent_range(rng: np.random.Generator) -> dict:
     map_name = base.ENV_CONFIG.get("map_name", "map_shibuya")
     n_nodes = base._get_map_node_count(map_name) or 0
-    min_agents = 2
-    max_agents = 2
+    min_agents = 5
+    max_agents = 10
     if n_nodes > 0:
-        min_agents = max(2, int(math.floor(n_nodes * 0.25)))
-        max_agents = max(2, int(math.floor(n_nodes * 0.33)))
         max_agents = min(max_agents, max(2, n_nodes - 1))
         min_agents = min(min_agents, max_agents)
     agent_num = int(rng.integers(min_agents, max_agents + 1))
@@ -156,24 +154,53 @@ def _run_stage(
     max_iterations: Optional[int] = None,
     early_stop_collision: Optional[float] = None,
     early_stop_patience: int = 0,
-    use_default_init: bool = True,
-    step_tolerance_index: Optional[int] = 0,
 ) -> PriorityParams:
     max_steps = args.max_steps if args.max_steps > 0 else None
     workers = args.workers if args.workers > 0 else (os.cpu_count() or 4)
-    resume_from_log = args.resume_from_log or log_csv.exists()
 
     start_time = time.time()
-    total_iterations = int(max_iterations if max_iterations is not None else args.iterations)
+    total_iterations = max_iterations if max_iterations is not None else args.iterations
     patience = 0
     best_params = None
     hist_means = []
     hist_collision = []
-    actual_iterations = 0
-
-    if early_stop_collision is None:
+    for it in range(int(total_iterations)):
         best_params, _, hist_means, hist_collision, _, _ = base.train_priority_params_gpu(
-            iterations=total_iterations,
+            iterations=1,
+            population=args.population,
+            sigma=args.sigma,
+            lr=args.lr,
+            episodes_per_candidate=args.episodes_per_candidate,
+            eval_episodes=args.eval_episodes,
+            seed=args.seed + it,
+            domain_randomize=args.domain_randomize,
+            collision_penalty=args.collision_penalty,
+            save_params_json=None,
+            log_csv=str(log_csv),
+            plot_png=str(plot_png) if plot_png is not None else None,
+            clip_step_norm=args.clip_step_norm,
+            best_update_mode=args.best_update_mode,
+            best_update_alpha=args.best_update_alpha,
+            best_update_gap=args.best_update_gap,
+            max_steps=max_steps,
+            workers=workers,
+            candidate_workers=args.candidate_workers,
+            device_override=args.device,
+            verbose=False,
+            reuse_env=False,
+            resume_from_log=True,
+        )
+        if early_stop_collision is not None and hist_collision:
+            last_coll = hist_collision[-1]
+            if np.isfinite(last_coll) and last_coll < early_stop_collision:
+                patience += 1
+            else:
+                patience = 0
+            if patience >= max(early_stop_patience, 1):
+                break
+    if best_params is None:
+        best_params, _, _, _, _, _ = base.train_priority_params_gpu(
+            iterations=1,
             population=args.population,
             sigma=args.sigma,
             lr=args.lr,
@@ -192,83 +219,13 @@ def _run_stage(
             max_steps=max_steps,
             workers=workers,
             candidate_workers=args.candidate_workers,
+            device_override=args.device,
             verbose=False,
             reuse_env=False,
-            resume_from_log=resume_from_log,
-            use_default_init=use_default_init,
-            step_tolerance_index=step_tolerance_index,
+            resume_from_log=True,
         )
-        actual_iterations = total_iterations
-    else:
-        for it in range(total_iterations):
-            resume_from_log = args.resume_from_log or log_csv.exists()
-            target_iterations = it + 1
-            best_params, _, hist_means, hist_collision, _, _ = base.train_priority_params_gpu(
-                iterations=target_iterations,
-                population=args.population,
-                sigma=args.sigma,
-                lr=args.lr,
-                episodes_per_candidate=args.episodes_per_candidate,
-                eval_episodes=args.eval_episodes,
-                seed=args.seed,
-                domain_randomize=args.domain_randomize,
-                collision_penalty=args.collision_penalty,
-                save_params_json=None,
-                log_csv=str(log_csv),
-                plot_png=str(plot_png) if plot_png is not None else None,
-                clip_step_norm=args.clip_step_norm,
-                best_update_mode=args.best_update_mode,
-                best_update_alpha=args.best_update_alpha,
-                best_update_gap=args.best_update_gap,
-                max_steps=max_steps,
-                workers=workers,
-                candidate_workers=args.candidate_workers,
-                verbose=False,
-                reuse_env=False,
-                resume_from_log=resume_from_log,
-                use_default_init=use_default_init,
-                step_tolerance_index=step_tolerance_index,
-            )
-            actual_iterations = target_iterations
-            if hist_collision:
-                last_coll = hist_collision[-1]
-                if np.isfinite(last_coll) and last_coll < early_stop_collision:
-                    patience += 1
-                else:
-                    patience = 0
-                if patience >= max(early_stop_patience, 1):
-                    break
-        if best_params is None:
-            resume_from_log = args.resume_from_log or log_csv.exists()
-            best_params, _, _, _, _, _ = base.train_priority_params_gpu(
-                iterations=1,
-                population=args.population,
-                sigma=args.sigma,
-                lr=args.lr,
-                episodes_per_candidate=args.episodes_per_candidate,
-                eval_episodes=args.eval_episodes,
-                seed=args.seed,
-                domain_randomize=args.domain_randomize,
-                collision_penalty=args.collision_penalty,
-                save_params_json=None,
-                log_csv=str(log_csv),
-                plot_png=str(plot_png) if plot_png is not None else None,
-                clip_step_norm=args.clip_step_norm,
-                best_update_mode=args.best_update_mode,
-                best_update_alpha=args.best_update_alpha,
-                best_update_gap=args.best_update_gap,
-                max_steps=max_steps,
-                workers=workers,
-                candidate_workers=args.candidate_workers,
-                verbose=False,
-                reuse_env=False,
-                resume_from_log=resume_from_log,
-                use_default_init=use_default_init,
-                step_tolerance_index=step_tolerance_index,
-            )
-            actual_iterations = 1
     elapsed = time.time() - start_time
-    actual_iterations = max(int(actual_iterations), 1)
+    actual_iterations = max(len(hist_means), 1)
     total_rollouts = int(actual_iterations) * int(args.population) * int(args.episodes_per_candidate)
     if save_json is not None:
         payload = {
@@ -309,16 +266,12 @@ def main() -> None:
     parser.add_argument("--agent-num", type=int, default=10)
     parser.add_argument("--stage3-ratios", type=str, default="0.25,0.5")
     parser.add_argument("--sweep-maps", action="store_true")
-    parser.add_argument("--iterations", type=int, default=150)
+    parser.add_argument("--iterations", type=int, default=80)
     parser.add_argument("--population", type=int, default=16)
     parser.add_argument("--sigma", type=float, default=0.1)
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--episodes-per-candidate", type=int, default=5)
     parser.add_argument("--eval-episodes", type=int, default=5)
-    parser.add_argument("--clip-step-norm", type=float, default=0.0)
-    parser.add_argument("--best-update-mode", type=str, default="max")
-    parser.add_argument("--best-update-alpha", type=float, default=0.1)
-    parser.add_argument("--best-update-gap", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--collision-penalty", type=float, default=None)
     parser.add_argument("--max-steps", type=int, default=0)
@@ -365,7 +318,7 @@ def main() -> None:
         base.vector_to_params = _vector_to_params_step_only
         base.sample_env_config = _sample_env_config_agent_range
         args.domain_randomize = True
-        stage1_params = _run_stage(
+        _run_stage(
             "stage1_step_tolerance",
             args,
             logs_dir / "train_log_stage1_step_tolerance.csv",
@@ -373,9 +326,7 @@ def main() -> None:
             logs_dir / "stage1_step_tolerance_params.json",
             max_iterations=150,
             early_stop_collision=0.1,
-            early_stop_patience=5,
-            use_default_init=True,
-            step_tolerance_index=0,
+            early_stop_patience=10,
         )
 
         # Stage 2: pick/drop only, agent_num random in [5, 10]
@@ -383,15 +334,13 @@ def main() -> None:
         base.vector_to_params = _vector_to_params_pick_drop
         base.sample_env_config = _sample_env_config_agent_range
         args.domain_randomize = True
-        stage2_params = _run_stage(
+        _run_stage(
             "stage2_pick_drop",
             args,
             logs_dir / "train_log_stage2_pick_drop.csv",
             plots_dir / "reward_stage2_pick_drop.png",
             logs_dir / "stage2_pick_drop_params.json",
             max_iterations=100,
-            use_default_init=False,
-            step_tolerance_index=None,
         )
 
         # Stage 3: step_tolerance, assign_pick_weight, goal_weight (agent_num ratios)
@@ -403,18 +352,6 @@ def main() -> None:
             base.ENV_CONFIG["agent_num"] = _agent_num_from_ratio(map_name, ratio)
             base.ENV_CONFIG = base._normalized_env_config(base.ENV_CONFIG)
             ratio_tag = f"{ratio:.2f}".replace(".", "p")
-            if stage1_params is not None and stage2_params is not None:
-                start_params = PriorityParams(
-                    goal_weight=float(getattr(stage2_params, "goal_weight", 1.0)),
-                    pick_weight=float(getattr(stage2_params, "pick_weight", 1.0)),
-                    drop_weight=float(getattr(stage2_params, "drop_weight", 1.0)),
-                    assign_pick_weight=float(getattr(stage2_params, "assign_pick_weight", 1.0)),
-                    assign_drop_weight=float(getattr(stage2_params, "assign_drop_weight", 1.0)),
-                    congestion_weight=float(getattr(stage2_params, "congestion_weight", 0.0)),
-                    assign_spread_weight=float(getattr(stage2_params, "assign_spread_weight", 1.0)),
-                    step_tolerance=float(getattr(stage1_params, "step_tolerance", 0.0)),
-                )
-                set_priority_params(start_params)
             _run_stage(
                 f"stage3_step_assign_goal_ratio_{ratio_tag}",
                 args,
@@ -422,8 +359,6 @@ def main() -> None:
                 plots_dir / f"reward_stage3_step_assign_goal_{ratio_tag}.png",
                 logs_dir / f"stage3_step_assign_goal_{ratio_tag}_params.json",
                 max_iterations=100,
-                use_default_init=False,
-                step_tolerance_index=0,
             )
 
 
