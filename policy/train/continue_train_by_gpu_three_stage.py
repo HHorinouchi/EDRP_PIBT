@@ -105,7 +105,6 @@ def _params_to_vector_stage3(params: PriorityParams) -> np.ndarray:
             float(getattr(params, "step_tolerance", 0.0) or 0.0),
             float(getattr(params, "assign_pick_weight", 1.0)),
             float(getattr(params, "goal_weight", 1.0)),
-            float(getattr(params, "congestion_weight", 0.0)),
         ],
         dtype=np.float32,
     )
@@ -117,18 +116,16 @@ def _vector_to_params_stage3(vec: np.ndarray) -> PriorityParams:
     step_val = float(raw[0]) if raw.size > 0 else float(getattr(current, "step_tolerance", 0.0) or 0.0)
     assign_pick = float(raw[1]) if raw.size > 1 else float(getattr(current, "assign_pick_weight", 1.0))
     goal_w = float(raw[2]) if raw.size > 2 else float(getattr(current, "goal_weight", 1.0))
-    congestion_w = float(raw[3]) if raw.size > 3 else float(getattr(current, "congestion_weight", 0.0))
     step_val = _clip_step_tol(step_val)
     assign_pick = float(np.clip(assign_pick, 0.0, 10.0))
     goal_w = float(np.clip(goal_w, 0.0, 10.0))
-    congestion_w = float(np.clip(congestion_w, -10.0, 10.0))
     return PriorityParams(
         goal_weight=goal_w,
         pick_weight=float(getattr(current, "pick_weight", 1.0)),
         drop_weight=float(getattr(current, "drop_weight", 1.0)),
         assign_pick_weight=assign_pick,
         assign_drop_weight=float(getattr(current, "assign_drop_weight", 1.0)),
-        congestion_weight=congestion_w,
+        congestion_weight=float(getattr(current, "congestion_weight", 0.0)),
         assign_spread_weight=float(getattr(current, "assign_spread_weight", 1.0)),
         step_tolerance=step_val,
     )
@@ -188,6 +185,7 @@ def _run_stage(
             max_steps=max_steps,
             workers=workers,
             candidate_workers=args.candidate_workers,
+            device_override=args.device,
             verbose=False,
             reuse_env=False,
             resume_from_log=True,
@@ -221,6 +219,7 @@ def _run_stage(
             max_steps=max_steps,
             workers=workers,
             candidate_workers=args.candidate_workers,
+            device_override=args.device,
             verbose=False,
             reuse_env=False,
             resume_from_log=True,
@@ -273,10 +272,6 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--episodes-per-candidate", type=int, default=5)
     parser.add_argument("--eval-episodes", type=int, default=5)
-    parser.add_argument("--clip-step-norm", type=float, default=0.0)
-    parser.add_argument("--best-update-mode", type=str, default="max")
-    parser.add_argument("--best-update-alpha", type=float, default=0.1)
-    parser.add_argument("--best-update-gap", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--collision-penalty", type=float, default=None)
     parser.add_argument("--max-steps", type=int, default=0)
@@ -331,7 +326,7 @@ def main() -> None:
             logs_dir / "stage1_step_tolerance_params.json",
             max_iterations=150,
             early_stop_collision=0.1,
-            early_stop_patience=5,
+            early_stop_patience=10,
         )
 
         # Stage 2: pick/drop only, agent_num random in [5, 10]
