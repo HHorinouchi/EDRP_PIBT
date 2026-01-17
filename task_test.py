@@ -3,15 +3,16 @@ import numpy as np
 import yaml
 import time
 from argparse import Namespace
+# from policy.policy_pibt import policy
 from policy.my_policy import policy
 
 total_task_completed = 0
 total_collision_ended = 0
 loopnum = 100
-total_steps = 300
+total_steps = 100
 max_count = 0
 for i in range(0, loopnum):
-    env=gym.make("drp_env:drp-5agent_map_5x4-v2", state_repre_flag = "onehot_fov", task_flag = True)
+    env=gym.make("drp_env:drp-10agent_map_5x4-v2", state_repre_flag = "onehot_fov", task_flag = True)
     n_obs=env.reset()
     print("action_space", env.action_space)
     print("observation_space", env.observation_space)
@@ -20,7 +21,7 @@ for i in range(0, loopnum):
 
     last_completion = 0
     total_count = 0
-
+    actions_list = []
     for step in range(total_steps):
         # env.render()
         # print(f"\nStep {step + 1}")
@@ -44,11 +45,7 @@ for i in range(0, loopnum):
         #     if i < len(env.assigned_tasks):
         #         print(f" Agent {i} assigned task: {env.assigned_tasks[i]}")
 
-        # 各エピソード内で、全タスク完了数が agent_num * 3 に達したら終了
-        # （各エージェントが平均3件ずつタスクを完了したイメージ）
-        if last_completion is not None and last_completion >= env.agent_num * 3:
-            print(f"Episode ended: total task_completion reached {env.agent_num * 3}.")
-            break
+        # ステップ上限に達するまで継続（タスク数による打ち切りはしない）
 
         if all(done):
             if info.get("collision"):
@@ -73,3 +70,23 @@ print(f"Episodes ended due to collision: {total_collision_ended} / {loopnum}")
 # 1000回平均結果
 # タスク振り分けを、ピックアップノードからの距離のみで取ったとき：16.75
 # タスク振り分けを、ピックアップノードからの距離とドロップオフノードからの距離の両方を考慮したとき：22.31
+
+ # 100ステップmy_policy()10
+# Final total tasks average completed: 25.07
+# Max count of while loop: 96750
+# Episodes ended due to collision: 6 / 100
+
+# 100ステップpolicy_pibt
+# Final total tasks average completed: 25.1
+# Max count of while loop: 89044
+# Episodes ended due to collision: 12 / 100
+
+# 100ステップmy_policy(5)
+# Final total tasks average completed: 17.15
+# Max count of while loop: 427
+# Episodes ended due to collision: 3 / 100
+
+# 100ステップpolicy_pibt(5)
+# Final total tasks average completed: 15.67
+# Max count of while loop: 247
+# Episodes ended due to collision: 0 / 100

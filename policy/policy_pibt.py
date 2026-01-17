@@ -261,10 +261,10 @@ def detect_actions(env):
     # 基本的には最短経路上の行動を選択するが、衝突する場合は他の行動を選択
     # i番目の可能な行動の中でそれ以上の優先度と衝突しない行動がなかった場合、一つ上の優先度の行動を再選択する
     # 占有されるノードを管理（何ステップ後に占有されるかも一緒に）List[(node, step)]
-    occupied_nodes = [(None, None)] * env.agent_num
+    occupied_nodes = [None] * env.agent_num
     # 占有されるエッジを管理 List[ (from_node, to_node) ]
     # 次に進むノードを設定したあとに、次の行動が取れるように、最低一つは経路を確保しておくために、occupied_edgesの後半に用意
-    occupied_edges = [(None, None, 0)] * (env.agent_num * 2)
+    occupied_edges = [(None, None)] * (env.agent_num)
 
     current_priority = 0 # 行動が決定したエージェント数
     most_high_priority = 0  # 最も高い優先度のエージェントインデックス
@@ -299,16 +299,18 @@ def detect_actions(env):
             # -1, -2, ... を後ろに回す
             # actionが-の場合、停止するステップ数が1,2,3,...と増えることを意味するため
             sorted_avail_actions.append(-i)
+            # sorted_avail_actionsにcurrent_startが含まれていたら削除する
+            sorted_avail_actions.remove(env.current_start[i]) if env.current_start[i] in sorted_avail_actions else None
         avail_actions_list.append(sorted_avail_actions)
         actions.append(None)
 
     row_avail_actions_list = copy.deepcopy(avail_actions_list)
     # エッジ上のエージェントについては先にエッジの占有をしておく
     for agent_id in range(env.agent_num):
-        if len(row_avail_actions_list[agent_id]) == 2: # これは、エッジ上にいるとき
+        if len(row_avail_actions_list[agent_id]) == max_wait+1: # これは、エッジ上にいるとき
             next_node = row_avail_actions_list[agent_id][0]  # エッジ上にいるときは進行方向のノードにしか行けない
             needed_step = calculate_steps_to_node(env, agent_id, next_node)
-            occupied_edges[agent_id] = (env.current_start[agent_id], next_node, needed_step)
+            occupied_edges[agent_id] = (env.current_start[agent_id], next_node)
 
     count = 0
     
@@ -339,26 +341,18 @@ def detect_actions(env):
             conflict = False
             for check_idx in range(current_priority):
                 higher_agent_idx, _ = priority_order[check_idx]
-                occ_node, occ_needed_step = occupied_nodes[higher_agent_idx]
-                if occ_node == next_node and abs(occ_needed_step - needed_step) <= step_tolerance:
+                occ_node= occupied_nodes[higher_agent_idx]
+                if occ_node == next_node:
                     conflict = True
                     avail_actions.remove(action)
                     break
                 # エッジの占有状況を確認
-                start, end, release = occupied_edges[higher_agent_idx]
+                start, end = occupied_edges[higher_agent_idx]
                 if start is not None and end is not None:
                     same_direction = start == env.current_start[agent_idx] and end == next_node
                     reverse_direction = start == next_node and end == env.current_start[agent_idx]
-                    # 逆方向に進むエージェントが同時刻に交差する場合のみ衝突とみなす
-                    if reverse_direction and abs(release - needed_step) <= step_tolerance:
-                        conflict = True
-                        avail_actions.remove(action)
-                        break
-                # デッドロック防止のために、最低一つは経路を確保
-                start, end, release = occupied_edges[higher_agent_idx + env.agent_num]
-                if start is not None and end is not None:
-                    reverse_direction = start == next_node and end == env.current_start[agent_idx]
-                    if reverse_direction:
+                    # 同方向/逆方向いずれのエッジ占有も衝突とみなす
+                    if same_direction or reverse_direction:
                         conflict = True
                         avail_actions.remove(action)
                         break
@@ -371,21 +365,21 @@ def detect_actions(env):
                 # 停止行動を選択した場合、needed_stepにはneeded_step+1を設定（停止しているため、そのノードは次のステップまで占有される）
                 if action < 0:
                     wait_steps = abs(action)                  # -1 → 1ステップ待機
-                    release_node = needed_step + step_tolerance   # needed_step はノード到達までのステップ (待機なら0)
+                    release_node = needed_step + wait_steps   # needed_step はノード到達までのステップ (待機なら0)
                     # エージェントがcurrent_start[agent_idx]との距離がenv.speed以下の場合、停止している間もそのノードを占有し続ける
                     distance_to_current = calculate_steps_to_node(env, agent_idx, env.current_start[agent_idx])
                     if distance_to_current <= 5/speed + 1:
-                        occupied_nodes[agent_idx] = (env.current_start[agent_idx], distance_to_current + wait_steps)
+                        occupied_nodes[agent_idx] = env.current_start[agent_idx]
                     # エージェントがnext_nodeとの距離がenv.speed以下の場合、停止している間もそのノードを占有し続ける
                     elif calculate_steps_to_node(env, agent_idx, next_node) <= 5/speed + 1:
-                        occupied_nodes[agent_idx] = (next_node, release_node)
+                        occupied_nodes[agent_idx] = next_node
                     else:
-                        occupied_nodes[agent_idx] = (None, None)
-                    occupied_edges[agent_idx] = (env.current_start[agent_idx], next_node, release_node)
+                        occupied_nodes[agent_idx] = None
+                    occupied_edges[agent_idx] = (env.current_start[agent_idx], next_node) 
                 else:
                     release_node = needed_step                # 到着タイミングでノードを解放
-                    occupied_nodes[agent_idx] = (next_node, release_node)
-                    occupied_edges[agent_idx] = (env.current_start[agent_idx], next_node, release_node)# デッドロックを回避するために、次のノードに到着したあとの経路が一つしか選択肢が残されていなかったら、その経路も占有
+                    occupied_nodes[agent_idx] = next_node
+                    occupied_edges[agent_idx] = (env.current_start[agent_idx], next_node)# デッドロックを回避するために、次のノードに到着したあとの経路が一つしか選択肢が残されていなかったら、その経路も占有
                 # next_node到着後の可能な行動を確認
                 graph = env.G               # NetworkX graph built in MapMake
                 neighbors = list(graph.neighbors(next_node))
@@ -398,23 +392,15 @@ def detect_actions(env):
                     # higher priority agentsの占有状況を確認
                     for check_idx in range(current_priority):
                         higher_agent_idx, _ = priority_order[check_idx]
-                        occ_e_start, occ_e_end, occ_release = occupied_edges[higher_agent_idx]
+                        occ_e_start, occ_e_end = occupied_edges[higher_agent_idx]
                         if occ_e_start is not None and occ_e_end is not None:
                             reverse_direction = occ_start == occ_e_end and occ_end == occ_e_start
-                            if reverse_direction:
-                                blocked = True
-                                break
-                        occ_e_start2, occ_e_end2, occ_release2 = occupied_edges[higher_agent_idx + env.agent_num]
-                        if occ_e_start2 is not None and occ_e_end2 is not None:
-                            reverse_direction = occ_start == occ_e_end2 and occ_end == occ_e_start2
-                            if reverse_direction:
+                            same_direction = occ_start == occ_e_start and occ_end == occ_e_end
+                            if same_direction or reverse_direction:
                                 blocked = True
                                 break
                     if not blocked:
                         filtered_edges.append(edge)
-                if len(filtered_edges) == 1:
-                    occ_start, occ_end = filtered_edges[0]
-                    occupied_edges[agent_idx + env.agent_num] = (occ_start, occ_end, 0)
 
                 
                 avail_actions.remove(action)
@@ -432,16 +418,16 @@ def detect_actions(env):
                 # ノードの占有状況を更新
                 # current_startノード、next_nodeからの距離がenv.speed以下の場合、そのノードを停止している間も占有し続ける
                 distance_to_current = calculate_steps_to_node(env, agent_idx, env.current_start[agent_idx])
-                if distance_to_current <= 5/speed + 1:
-                    occupied_nodes[agent_idx] = (env.current_start[agent_idx], distance_to_current + max_wait)
-                elif calculate_steps_to_node(env, agent_idx, next_node) <= 5/speed + 1:
-                    occupied_nodes[agent_idx] = (next_node, max_wait)
+                if distance_to_current <= 3:
+                    occupied_nodes[agent_idx] = env.current_start[agent_idx]
+                elif calculate_steps_to_node(env, agent_idx, next_node) <= 3:
+                    occupied_nodes[agent_idx] = next_node
                 # エッジの占有状況を更新
                 # エージェントがエッジ上にいる場合、現在ノードから次ノードへのエッジを占有
                 if len(row_avail_actions_list[agent_idx]) == max_wait+1:
-                    occupied_edges[agent_idx] = (env.current_start[agent_idx], row_avail_actions_list[agent_idx][0], step_tolerance)
+                    occupied_edges[agent_idx] = (env.current_start[agent_idx], row_avail_actions_list[agent_idx][0])
                 else:
-                    occupied_edges[agent_idx] = (None, None, 0)
+                    occupied_edges[agent_idx] = (None, None)
             else:
                 # 現在のagent_idxの可能行動をリセット
                 avail_actions_list[agent_idx] = copy.deepcopy(row_avail_actions_list[agent_idx])
@@ -450,17 +436,11 @@ def detect_actions(env):
                 current_priority -= 1
                 # 一つ上の優先度のエージェントが占有しているノードとエッジの占有状況を解除
                 # occupied_nodesとoccupied_edgesから、最も後に追加された該当エージェントの占有状況を削除
-                occupied_nodes[prev_agent_idx] = (None, None)
-                occupied_edges[prev_agent_idx] = (None, None, 0)
-                occupied_edges[prev_agent_idx + env.agent_num] = (None, None, 0)
+                occupied_nodes[prev_agent_idx] = None
+                occupied_edges[prev_agent_idx] = (None, None)
+                occupied_edges[prev_agent_idx] = (None, None)
                 continue
             
-    if actions and all((a is not None and a < 0) for a in actions):
-        for i in range(env.agent_num):
-            fallback_actions = row_avail_actions_list[i]
-            if fallback_actions:
-                actions[i] = fallback_actions[0]
-
     return actions, count
 
 # 現在ノードとタスクスタートノード、タスクゴールノードを用いた最短経路距離を計算（未ピックアップ）

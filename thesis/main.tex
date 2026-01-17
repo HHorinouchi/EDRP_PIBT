@@ -1,55 +1,52 @@
 \documentclass{kuisthesis}           % 日本語 
 %\documentclass[english]{kuisthesis} % 英語
 
-\jtitle[PIBT-G における優先度パラメータの\\
-特定マップ最適化と汎化性能のトレードオフ分析]%	% 和文題目（内容梗概／目次用）
-	{PIBT-G における優先度パラメータの
-特定マップ最適化と汎化性能のトレードオフ分析}	% 和文題目
-\etitle{Trade-off Analysis Between Specific Map Optimization and Generalization Performance of Priority Parameters in PIBT-G}	% 英文題目
-\jauthor{堀之内 駿輝}				% 和文著者名
-\eauthor{Hayaki Horinouchi}			% 英文著者名
-\supervisor{伊藤孝之 教授}			% 指導教員名
-\date{\today}				% 提出年月日
+% 画像を表示するためのパッケージ（これを追加しないと画像が出ません）
+\usepackage[dvipdfmx]{graphicx}
+\usepackage{booktabs}
+
+% --- 論文題目 ---
+
+
+\jtitle[グラフベースPIBTにおけるパラメータの環境特化と\\密度適応のトレードオフ分析]%   % 和文題目（内容梗概／目次用）
+    {グラフベースPIBTにおける\\パラメータの環境特化と密度適応の\\トレードオフ分析}    % 和文題目（表紙用）
+
+\etitle{Trade-off Analysis between Environment Specialization and Density Adaptation in Graph-based PIBT Parameters}   % 英文題目
+
+\jauthor{堀之内 駿輝}                % 和文著者名
+\eauthor{Hayaki Horinouchi}          % 英文著者名
+\supervisor{伊藤孝行 教授}           % 指導教員名
+\date{\today}                       % 提出年月日
 
 \begin{document}
-\maketitle					% 「とびら」の出力
-
+\maketitle                    % 「とびら」の出力
 
 % ------- 論文要旨 -------
-% 独立ページ扱いなので、ファイル内で\clearpageを入れても良いですが、
-% ここで区切ったほうが構造が明確です。
+% 先ほど作成した GAP-PIBT の名称を含む abstract を読み込みます
 \input{sections/00_abstract.tex}
 \clearpage
 
 % ------- 目次 -------
 \tableofcontents
 
+% ------- 本文 -------
 % 各章の読み込み
-% \input コマンドは、指定したファイルの中身をそのままここに展開します。
+% 各 tex ファイル内でも "PIBT-G" などの古い名称を "GAP-PIBT" に
+% 置換して記述してください．
 
 \input{sections/01_introduction.tex}
 \input{sections/02_background.tex}
-\input{sections/03_approach.tex}
-\input{sections/04_experiment.tex}
+\input{sections/03_approach.tex} % 先ほど作成したアプローチの章
+\input{sections/04_experiment_explanation.tex}
 \input{sections/05_result.tex}
 \input{sections/06_conclusion.tex}
 
+% ------- 謝辞 --------
+\acknowledgments
+\input{sections/acknowlegment.tex}
 % ------- 参考文献 -------
 \bibliographystyle{kuisunsrt}
 \bibliography{ref}
 
-\subsection*{これから読む論文}
-Mohamed S. Talamali, Genki Miyauchi, Thomas Watteyne, Micael S. Couceiro, Roderich Groß, "Ready, Bid, Go! On-Demand Delivery Using Fleets of Drones with
-Unknown, Heterogeneous Energy Storage Constraints", AAMAS 2025, May 19 – 23, 2025, Detroit, Michigan, USA\\
-
-Amila Thibbotuwawa, Grzegorz Bocewicz, Peter Nielsen, and Banaszak Zbigniew, "Planning deliveries with UAV routing under weather forecast and energy consumption constraints", IFAC PapersOnLine 52-13 (2019) 820–825\\
-
-Giacomo Lodigiani, Nicola Basilico, Francesco Amigoni, "Robust Multi-Agent Pickup and Delivery with Delays", 
-https://doi.org/10.48550/arXiv.
-
 
 \end{document}
-
-
-
-

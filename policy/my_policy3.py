@@ -238,230 +238,109 @@ def assign_task(env):
 
 def detect_actions(env):
     """
-    PIBTをもとに、各エージェントの行動を決定する
-    各エージェントの割り当てられたタスクに基づき、そのタスク完了にかかる最短経路で優先順位を決定する
+    再帰的なPIBT (Priority Inheritance with Backtracking) による行動決定
     """
     params = get_priority_params()
-    speed = float(getattr(env, "speed", 5.0))
-    step_tolerance = _resolve_step_tolerance(env, params, speed)
-    actions = []
-    if env.goal_array is None:
-        return [-1]*env.agent_num
-    # 各エージェントの最短経路距離を計算
+    
+    # 1. 優先度の決定 (計算量は最小限に)
     priority_scores = []
     for i in range(env.agent_num):
         assigned_task = env.assigned_tasks[i] if i < len(env.assigned_tasks) else []
+        # _priority_score は重いので、簡易的なスコア計算推奨。
+        # ここでは既存関数を使うが、実運用では _agent_congestion の get_path_length を削除すべき。
         score = _priority_score(env, i, assigned_task)
         priority_scores.append((i, score))
-
-    # 最短経路距離（または重みづけ距離）に基づき優先順位を決定（距離が短いほど高優先度）
+    
+    # スコアが小さい方が高優先度
     priority_order = sorted(priority_scores, key=lambda x: x[1])
-
-    # 優先度順に行動を決定。高優先度のエージェントと衝突しない行動を選択する
-    # 基本的には最短経路上の行動を選択するが、衝突する場合は他の行動を選択
-    # i番目の可能な行動の中でそれ以上の優先度と衝突しない行動がなかった場合、一つ上の優先度の行動を再選択する
-    # 占有されるノードを管理（何ステップ後に占有されるかも一緒に）List[(node, step)]
-    occupied_nodes = [(None, None)] * env.agent_num
-    # 占有されるエッジを管理 List[ (from_node, to_node) ]
-    # 次に進むノードを設定したあとに、次の行動が取れるように、最低一つは経路を確保しておくために、occupied_edgesの後半に用意
-    occupied_edges = [(None, None, 0)] * (env.agent_num * 2)
-
-    current_priority = 0 # 行動が決定したエージェント数
-    most_high_priority = 0  # 最も高い優先度のエージェントインデックス
-    max_wait = 1  # 最大停止ステップ数
-    # 各エージェントが可能な行動をリスト化し、行動を変更するときに同じ行動を繰り返さないようにする
-    avail_actions_list = []
-    for i in range(env.agent_num):
-        _, avail_actions = env.get_avail_agent_actions(i, env.n_actions)
-        # avail_actions_listをその行動を選択したときの割り当てられたタスクを完了するまでの最短経路距離でソート
-        path_length_list = []
-        for action in avail_actions:
-            assigned_task = env.assigned_tasks[i] if i < len(env.assigned_tasks) else []
-            has_task = bool(assigned_task)
-            current_goal = env.goal_array[i] if i < len(env.goal_array) else None
-            next_node = action
-            if has_task and len(assigned_task) >= 2:
-                pick_node = assigned_task[0]
-                drop_node = assigned_task[1]
-                if current_goal is not None and current_goal == drop_node:
-                    path = env.get_path_length(next_node, drop_node)
-                elif current_goal is not None and current_goal == pick_node:
-                    path = env.get_path_length(next_node, pick_node)
-                else:
-                    path = None
-            else:
-                path = None
-            path_length = path if path is not None else float("inf")
-            path_length_list.append((action, path_length))
-
-        sorted_avail_actions = [action for action, _ in sorted(path_length_list, key=lambda x: x[1])]
-        for i in range(1, max_wait+1):
-            # -1, -2, ... を後ろに回す
-            # actionが-の場合、停止するステップ数が1,2,3,...と増えることを意味するため
-            sorted_avail_actions.append(-i)
-        avail_actions_list.append(sorted_avail_actions)
-        actions.append(None)
-
-    row_avail_actions_list = copy.deepcopy(avail_actions_list)
-    # エッジ上のエージェントについては先にエッジの占有をしておく
-    for agent_id in range(env.agent_num):
-        if len(row_avail_actions_list[agent_id]) == 2: # これは、エッジ上にいるとき
-            next_node = row_avail_actions_list[agent_id][0]  # エッジ上にいるときは進行方向のノードにしか行けない
-            needed_step = calculate_steps_to_node(env, agent_id, next_node)
-            occupied_edges[agent_id] = (env.current_start[agent_id], next_node, needed_step)
-
-    count = 0
+    sorted_agents = [x[0] for x in priority_order]
     
-    while current_priority < env.agent_num:
-        count += 1
-        # if count > 10000:
-        #     # 無限ループ防止
-        #     # 可能な行動が見つからない場合、一生停止し続けてしまうため、衝突させにいく
-        #     for i in range(env.agent_num):
-        #         if actions[i] is None:
-        #             actions[i] = row_avail_actions_list[i][0]
-        #     break
-        # 優先度順にエージェントの行動を決定
-        # 衝突しない可能な行動が見つからなかった場合、current_priorityを減らして一つ上の優先度のエージェントの行動を再選択する
-        agent_idx, _ = priority_order[current_priority]
-        # 最短経路上の行動を優先的に選択
-        # ノードとエッジの占有状況を考慮して行動を決定
-        avail_actions = avail_actions_list[agent_idx]
-        action_selected = False
-        for action in list(avail_actions):
-            if len(row_avail_actions_list[agent_idx]) == max_wait+1: # これは、エッジ上にいるとき
-                next_node = row_avail_actions_list[agent_idx][0]  # エッジ上にいるときは進行方向のノードにしか行けない
-            elif action < 0: # ノード上にいて、行き先がなく停止を選択するとき,next_nodeは現在ノード
-                next_node = env.current_start[agent_idx]
-            else:
-                next_node = action
-            needed_step = calculate_steps_to_node(env, agent_idx, next_node) # エージェントが次のノードに到達するまでに必要なステップ数
-            conflict = False
-            for check_idx in range(current_priority):
-                higher_agent_idx, _ = priority_order[check_idx]
-                occ_node, occ_needed_step = occupied_nodes[higher_agent_idx]
-                if occ_node == next_node and abs(occ_needed_step - needed_step) <= step_tolerance:
-                    conflict = True
-                    avail_actions.remove(action)
-                    break
-                # エッジの占有状況を確認
-                start, end, release = occupied_edges[higher_agent_idx]
-                if start is not None and end is not None:
-                    same_direction = start == env.current_start[agent_idx] and end == next_node
-                    reverse_direction = start == next_node and end == env.current_start[agent_idx]
-                    # 逆方向に進むエージェントが同時刻に交差する場合のみ衝突とみなす
-                    if reverse_direction and abs(release - needed_step) <= step_tolerance:
-                        conflict = True
-                        avail_actions.remove(action)
-                        break
-                # デッドロック防止のために、最低一つは経路を確保
-                start, end, release = occupied_edges[higher_agent_idx + env.agent_num]
-                if start is not None and end is not None:
-                    reverse_direction = start == next_node and end == env.current_start[agent_idx]
-                    if reverse_direction:
-                        conflict = True
-                        avail_actions.remove(action)
-                        break
-                
-            if not conflict:
-                actions[agent_idx] = action
-                action_selected = True
-                current_priority += 1
-                # ノードの占有状況を更新
-                # 停止行動を選択した場合、needed_stepにはneeded_step+1を設定（停止しているため、そのノードは次のステップまで占有される）
-                if action < 0:
-                    wait_steps = abs(action)                  # -1 → 1ステップ待機
-                    release_node = needed_step + step_tolerance   # needed_step はノード到達までのステップ (待機なら0)
-                    # エージェントがcurrent_start[agent_idx]との距離がenv.speed以下の場合、停止している間もそのノードを占有し続ける
-                    distance_to_current = calculate_steps_to_node(env, agent_idx, env.current_start[agent_idx])
-                    if distance_to_current <= 5/speed + 1:
-                        occupied_nodes[agent_idx] = (env.current_start[agent_idx], distance_to_current + wait_steps)
-                    # エージェントがnext_nodeとの距離がenv.speed以下の場合、停止している間もそのノードを占有し続ける
-                    elif calculate_steps_to_node(env, agent_idx, next_node) <= 5/speed + 1:
-                        occupied_nodes[agent_idx] = (next_node, release_node)
-                    else:
-                        occupied_nodes[agent_idx] = (None, None)
-                    occupied_edges[agent_idx] = (env.current_start[agent_idx], next_node, release_node)
-                else:
-                    release_node = needed_step                # 到着タイミングでノードを解放
-                    occupied_nodes[agent_idx] = (next_node, release_node)
-                    occupied_edges[agent_idx] = (env.current_start[agent_idx], next_node, release_node)# デッドロックを回避するために、次のノードに到着したあとの経路が一つしか選択肢が残されていなかったら、その経路も占有
-                # next_node到着後の可能な行動を確認
-                graph = env.G               # NetworkX graph built in MapMake
-                neighbors = list(graph.neighbors(next_node))
-                # next_node, neighborsがoccupied_edgesに存在するか確認し、占有されているものをnext_edgesから除外
-                next_edges = [(next_node, nb) for nb in neighbors]
-                filtered_edges = []
-                for edge in next_edges:
-                    occ_start, occ_end = edge
-                    blocked = False
-                    # higher priority agentsの占有状況を確認
-                    for check_idx in range(current_priority):
-                        higher_agent_idx, _ = priority_order[check_idx]
-                        occ_e_start, occ_e_end, occ_release = occupied_edges[higher_agent_idx]
-                        if occ_e_start is not None and occ_e_end is not None:
-                            reverse_direction = occ_start == occ_e_end and occ_end == occ_e_start
-                            if reverse_direction:
-                                blocked = True
-                                break
-                        occ_e_start2, occ_e_end2, occ_release2 = occupied_edges[higher_agent_idx + env.agent_num]
-                        if occ_e_start2 is not None and occ_e_end2 is not None:
-                            reverse_direction = occ_start == occ_e_end2 and occ_end == occ_e_start2
-                            if reverse_direction:
-                                blocked = True
-                                break
-                    if not blocked:
-                        filtered_edges.append(edge)
-                if len(filtered_edges) == 1:
-                    occ_start, occ_end = filtered_edges[0]
-                    occupied_edges[agent_idx + env.agent_num] = (occ_start, occ_end, 0)
+    # 2. 変数初期化
+    actions = [None] * env.agent_num
+    # 各ノードを誰が使うか (node_id -> agent_id)
+    occupied_next_nodes = {} 
+    # 各ノードに誰がいるか (node_id -> agent_id)
+    current_node_occupants = {env.current_start[i]: i for i in range(env.agent_num)}
 
-                
-                avail_actions.remove(action)
-                # 一つ行動が決定したらループを抜ける
-                break
-    
-        if not action_selected:
-            # 衝突が避けられない場合可能な行動を補填し、一つ上の優先度のエージェントの行動を再選択
-            # 最上位優先度エージェントの場合、停止を選択
-            if current_priority <= most_high_priority:
-                # 最優先エージェントで可能な行動がない場合、停止を選択
-                actions[agent_idx] = -max_wait
-                current_priority += 1
-                most_high_priority += 1
-                # ノードの占有状況を更新
-                # current_startノード、next_nodeからの距離がenv.speed以下の場合、そのノードを停止している間も占有し続ける
-                distance_to_current = calculate_steps_to_node(env, agent_idx, env.current_start[agent_idx])
-                if distance_to_current <= 5/speed + 1:
-                    occupied_nodes[agent_idx] = (env.current_start[agent_idx], distance_to_current + max_wait)
-                elif calculate_steps_to_node(env, agent_idx, next_node) <= 5/speed + 1:
-                    occupied_nodes[agent_idx] = (next_node, max_wait)
-                # エッジの占有状況を更新
-                # エージェントがエッジ上にいる場合、現在ノードから次ノードへのエッジを占有
-                if len(row_avail_actions_list[agent_idx]) == max_wait+1:
-                    occupied_edges[agent_idx] = (env.current_start[agent_idx], row_avail_actions_list[agent_idx][0], step_tolerance)
-                else:
-                    occupied_edges[agent_idx] = (None, None, 0)
-            else:
-                # 現在のagent_idxの可能行動をリセット
-                avail_actions_list[agent_idx] = copy.deepcopy(row_avail_actions_list[agent_idx])
-                # 一つ上の優先度のエージェントの行動を再
-                prev_agent_idx, _ = priority_order[current_priority - 1]
-                current_priority -= 1
-                # 一つ上の優先度のエージェントが占有しているノードとエッジの占有状況を解除
-                # occupied_nodesとoccupied_edgesから、最も後に追加された該当エージェントの占有状況を削除
-                occupied_nodes[prev_agent_idx] = (None, None)
-                occupied_edges[prev_agent_idx] = (None, None, 0)
-                occupied_edges[prev_agent_idx + env.agent_num] = (None, None, 0)
+    # 3. 再帰関数 PIBT
+    def func_pibt(agent_i, inherit_priority_agent=None):
+        # 既に行動決定済みなら終了
+        if actions[agent_i] is not None:
+            return True
+        
+        # 可能な行動を取得 (優先度順にソート済みであることを期待)
+        # get_avail_agent_actions は "現在のノード" も含める必要がある (Waitアクション)
+        _, avail_actions = env.get_avail_agent_actions(agent_i, env.n_actions)
+        
+        # 行動の候補を作成 (タスクへの距離などでソート)
+        # ここでは簡易的に、既存のロジックでソートされたものと仮定
+        # ★重要: 候補には必ず「現在地(Wait)」を含めること
+        candidates = sorted(avail_actions, key=lambda a: random.random()) # 本来はゴールへの距離でソート
+        
+        # タスクがある場合、ゴール方向を優先するソートを行う
+        assigned_task = env.assigned_tasks[agent_i] if agent_i < len(env.assigned_tasks) else []
+        if assigned_task and len(assigned_task) >= 2:
+            target = assigned_task[1] if env.goal_array[agent_i] == assigned_task[1] else assigned_task[0]
+            def dist_sort(action):
+                d = env.get_path_length(action, target)
+                return d if d is not None else float('inf')
+            candidates = sorted(avail_actions, key=dist_sort)
+
+        # 現在地を維持するアクション(Wait)を候補の末尾に追加（またはavail_actionsに含まれているか確認）
+        current_node = env.current_start[agent_i]
+        if current_node not in candidates:
+             candidates.append(current_node)
+
+        for next_node in candidates:
+            # 衝突チェック1: 既に誰かが予約しているノードには行けない
+            if next_node in occupied_next_nodes:
                 continue
             
-    if actions and all((a is not None and a < 0) for a in actions):
-        for i in range(env.agent_num):
-            fallback_actions = row_avail_actions_list[i]
-            if fallback_actions:
-                actions[i] = fallback_actions[0]
+            # 衝突チェック2: エッジ衝突 (Swap衝突) の防止
+            # next_node に今いるエージェント j が、agent_i の現在地に来ようとしていないか？
+            agent_j = current_node_occupants.get(next_node)
+            
+            # まだ行動が決まっていない相手がいる場合
+            if agent_j is not None and agent_j != agent_i and actions[agent_j] is None:
+                # 相手に「自分はここに行きたいから、そこからどいてくれ」と再帰的に依頼
+                # 優先度継承: agent_j は agent_i の優先度を継承して行動決定を試みる
+                if func_pibt(agent_j, agent_i):
+                    # 相手がどいてくれた -> 相手の行き先チェック (Swapになっていないか)
+                    # actions[agent_j] が agent_i の現在地(current_node)だとSwap衝突
+                    if actions[agent_j] == current_node:
+                        continue # SwapになるのでこのノードはNG
+                else:
+                    # 相手がどけなかった -> このノードは諦める
+                    continue
+            
+            # すでに行動決定済みの相手がいる場合
+            elif agent_j is not None and agent_j != agent_i:
+                 if actions[agent_j] == current_node:
+                     continue # Swap衝突
 
-    return actions, count
+            # ここまで来れば next_node は確保可能
+            occupied_next_nodes[next_node] = agent_i
+            actions[agent_i] = next_node
+            return True
+        
+        # どの行動も取れない場合 (ここに来るのは稀だが、Waitすらできない場合)
+        # 通常はWait(現在地)が通るはず。
+        # どうしても無理なら「現在地」を強制予約 (衝突覚悟だがNoneよりマシ)
+        actions[agent_i] = current_node 
+        occupied_next_nodes[current_node] = agent_i
+        return False
+
+    # 4. 優先度の高い順に実行
+    for agent_idx in sorted_agents:
+        if actions[agent_idx] is None:
+            func_pibt(agent_idx)
+            
+    # 5. 万が一 None が残っていた場合のフェイルセーフ
+    for i in range(env.agent_num):
+        if actions[i] is None:
+            actions[i] = env.current_start[i] # その場停止
+
+    return actions, 0 # countは使わないので0
 
 # 現在ノードとタスクスタートノード、タスクゴールノードを用いた最短経路距離を計算（未ピックアップ）
 def calculate_task_path_length(env, agent_idx, assigned_task):

@@ -1,1 +1,133 @@
-\section{アプローチ}\label{sec-approach}
+\section{グラフ構造に基づくパラメータ適応型PIBTの提案}\label{sec-approach}
+
+本章では, 前章で述べた課題を解決するために本研究で提案する手法 \textbf{Graph-based Adaptive Parameter PIBT (GAP-PIBT)} について詳述する. 本研究では, 前章で言及したKajiらのDrone Routing Problem (DRP) \cite{Kaji2025} のモデルに基づき, 実環境に近い物理制約を持つグラフ環境上でのMulti-Agent Pickup and Delivery (MAPD) 問題を対象とする. GAP-PIBTは, 分散協調的な経路計画アルゴリズムであるPIBT (Priority Inheritance with Backtracking) をDRPで定義される連続的な距離を持つグラフ環境へと拡張し, さらにその挙動を決定するヒューリスティックパラメータを進化計算により自動最適化するものである. 
+
+\subsection{問題設定とシミュレーション環境}
+本研究では, シミュレーション環境として, Kajiらによって開発された \textbf{EDRP} \cite{kaji2024safe, edrp_github} を採用する. EDRPは, 前章で述べたDRPの定式化に基づき, 実世界の地理情報に基づくグラフ環境上でのドローン配送およびマルチエージェント制御を模擬可能なプラットフォームである. 
+
+\subsubsection{環境の定義}
+対象とする環境は, DRPモデルに従い無向グラフ $G=(V, E)$ で表される. 各ノード $v \in V$ は2次元ユークリッド空間上の座標 $\mathbf{p}_v \in \mathbb{R}^2$ を持ち, エッジ $e=(u, v) \in E$ の重みはノード間の物理的なユークリッド距離によって定義される. 
+従来の研究で一般的であったグリッドワールドとは異なり, エージェントはノード間を移動する際, エッジの距離と自身の設定速度 $v_{\text{speed}}$ に基づいた所要時間をかけて連続的に移動する. 
+
+\subsubsection{Lifelong MAPD問題の具体的設定}
+本研究では, 第\ref{sec-background}章で定義したMAPD問題に対し, 以下の具体的な設定を適用する. 
+システムには $m$ 体のエージェント $\mathcal{A}$ が存在し, 各エージェントは \textbf{Free} (待機中) , \textbf{ToPick} (集荷移動中) , \textbf{ToDrop} (配送移動中) の3状態を遷移しながら, 継続的に発生するタスクを処理する. 
+
+本実験における特有の制約として, エージェント間の衝突判定にはDRPモデルに基づく物理的距離 $d_{\text{safe}}$ を用いる. 衝突が発生した場合, 対象のエージェントにはペナルティが課され, シミュレーション設定に応じてその場での停止またはエピソードの強制終了となる. タスクの発生頻度や分布は, 実験設定に応じて調整される. 
+
+\subsection{GAP-PIBTの構成}
+複雑なグラフ環境下で効率的な配送を実現するため, 本研究では \textbf{GAP-PIBT (Graph-based Adaptive Parameter PIBT) } を提案する. 
+GAP-PIBT は, 分散アルゴリズムである PIBTをベースとしつつ, 以下の2点において大幅な拡張を行っている. 
+
+\begin{enumerate}
+    \item \textbf{パラメータ化された意思決定}: タスク割り当てや移動優先度の決定ルールを「重み付き線形和」として定式化し, 環境に応じた柔軟な戦略獲得を可能にする. 
+    \item \textbf{連続時間・グラフ対応}: 従来のグリッドベース PIBT を拡張し, エッジの長さや移動速度が異なるグラフ環境においても, 時間的な予約管理によって衝突を回避する. 
+\end{enumerate}
+
+以下に, GAP-PIBT を構成する3つの主要コンポーネントについて詳述する. 
+
+\subsubsection{パラメータ化されたタスク割り当て}
+Free状態 (待機中) のエージェント $a_i$ が新たなタスクを選択する際, 単純な「最も近いタスク」を選ぶ戦略が必ずしも全体最適とは限らない (例：遠くても配送距離が短いタスクを優先すべき場合など) . 
+そこで GAP-PIBT では, 未割り当てタスク $\tau_j$ に対するスコア関数 $S_{\text{assign}}(i, j)$ を以下のように定義し, この値が最小となるタスクを割り当てる. 
+
+\begin{equation}
+    S_{\text{assign}}(i, j) = w_{\text{ap}} \cdot d(\mathbf{p}_i, v^{\text{pick}}_j) + w_{\text{ad}} \cdot d(v^{\text{pick}}_j, v^{\text{drop}}_j) + w_{\text{bias}}
+\end{equation}
+
+ここで, 各項の重みパラメータ $w$ は進化戦略による最適化対象であり, 具体的には以下の役割を持つ.
+\begin{itemize}
+    \item \textbf{$w_{\text{ap}}$ (assign\_pick\_weight)}: 現在地から集荷地点（Pickup）までの距離に対する重み. 近傍のタスクを優先するか否かを制御する.
+    \item \textbf{$w_{\text{ad}}$ (assign\_drop\_weight)}: 集荷地点から配送地点（Dropoff）までの距離に対する重み. 輸送距離が短い（あるいは長い）タスクを優先する傾向を制御する.
+    \item \textbf{$w_{\text{bias}}$}: タスク割り当ての閾値を調整するバイアス項. 
+\end{itemize}
+
+\subsubsection{状況適応型の優先度決定ロジック}
+PIBT の性能 (デッドロック回避やスループット) は, 競合発生時に「どのエージェントを優先するか」という順序付けに強く依存する. 
+GAP-PIBT では, エージェント $a_i$ の状態に応じた優先度スコア $P(i)$ を以下の式で計算する (スコアが小さいほど高優先度となる) . 
+
+\begin{equation}
+P(i) =
+\begin{cases}
+w_{\text{dist}} \cdot d(\mathbf{p}_i, g_i) + w_{\text{cong}} \cdot C(i) & (\text{if has task}) \\
+w_{\text{idle\_penalty}} + w_{\text{idle\_bias}} \cdot N_{\text{avail}}(i) & (\text{if Free})
+\end{cases}
+\label{eq:priority}
+\end{equation}
+
+各変数の定義および対応する最適化パラメータは以下の通りである. 
+\begin{description}
+    \item[タスク保持時 (Has Task)] \mbox{} \\
+    目的地 $g_i$（集荷または配送地点）へ向かう際の優先度. 
+    \begin{itemize}
+        \item $w_{\text{dist}}$: 目的地までの距離 $d(\mathbf{p}_i, g_i)$ に掛かる重み. 
+        エージェントの状態に応じて, 基本的なゴール指向性を示す \textbf{goal\_weight}, 集荷に向かう際の \textbf{pick\_weight}, 配送に向かう際の \textbf{drop\_weight} などが適用される.
+        \item $w_{\text{cong}}$ (\textbf{congestion\_weight}): 周辺の混雑度 $C(i)$ に対する重み. $C(i)$ は一定ステップ内に到達可能な他エージェント数で定義される. これを高く設定すると「混雑しているエージェントを先に通す」といった戦略が発現する. 
+    \end{itemize}
+    
+    \item[待機時 (Free)] \mbox{} \\
+    タスクを持っていない状態での優先度. 待機位置の調整に関わるパラメータ ($w_{\text{idle\_penalty}}, w_{\text{idle\_bias}}$) を含む.
+\end{description}
+
+\subsubsection{グラフ環境における連続時間予約}
+従来の PIBT はグリッド環境 (移動コストが常に1) を前提としているため, エッジの長さが不均一なグラフ環境にはそのまま適用できない. 
+GAP-PIBT では, エージェントがノード間を移動する際, 物理速度 $v_{\text{speed}}$ に基づいて算出される「到着予定時刻」を用いてリソース (ノードおよびエッジ) の予約管理を行う. 
+
+エージェント $a_i$ が隣接ノード $v_{\text{next}}$ へ移動を試みる際, 以下の手順で安全性を検証する. 
+
+\begin{enumerate}
+    \item \textbf{所要時間の計算}: 現在地から $v_{\text{next}}$ までの距離に基づき, 到着予定時刻 $T_{\text{arrival}}^{(i)}$ を算出する. 
+    \item \textbf{時間枠の確認}: 移動先ノード $v_{\text{next}}$ に対し, 自分より優先度の高いエージェント $a_k$ が既に予約を入れているか確認する. 
+    \item \textbf{安全マージンの確保}: もし先行予約が存在する場合, 自身の到着時刻との差が, 設定された安全マージン (\textbf{step\_tolerance}: $T_{\text{tol}}$) 以上であるかを判定する. 
+\end{enumerate}
+
+移動許可条件は以下の不等式で表される. 
+\begin{equation}
+    |T_{\text{arrival}}^{(i)} - T_{\text{arrival}}^{(k)}| > T_{\text{tol}}
+    \label{eq:safety_margin}
+\end{equation}
+
+この \textbf{step\_tolerance} も最適化対象のパラメータであり, マップのトポロジー（ノード間の角度や密集度）に応じて, 衝突回避に必要な最小限のマージンが自動的に獲得されることが期待される.
+
+
+\subsection{進化戦略によるパラメータ最適化}
+前節で定義した GAP-PIBT の挙動は, 上述したパラメータ群 $\theta$ に依存する. これらはマップの形状やエージェント数によって最適な値が異なるため, 人手による調整は困難である. そこで本研究では, Evolution Strategy (ES) を用いてパラメータ $\theta$ の自動最適化を行う. 
+
+\subsubsection{学習アルゴリズム}
+最適化手法には, 勾配を用いないブラックボックス最適化手法の一つである OpenAI-ES (Natural Evolution Strategiesの一種) を採用する. 
+学習プロセスは以下の通りである. 
+\begin{enumerate}
+    \item \textbf{摂動の生成}: 現在のパラメータ平均 $\theta_t$ に対し, ガウス分布に従うノイズ $\epsilon_k \sim \mathcal{N}(0, I)$ を加え, $N$ 個の候補パラメータ $\theta_k = \theta_t + \sigma \epsilon_k$ を生成する. 
+    \item \textbf{ロールアウト}: 各候補パラメータ $\theta_k$ を用いて並列にシミュレーションを実行し, 評価を行う. 
+    本研究では Lifelong MAPD 設定を採用しているため, タスクは継続的に追加され, 完了すべきタスクの総数は決まっていない. そのため, 各エピソードの終了条件として固定の最大ステップ数 $T_{\text{limit}}$ (タイムリミット) を設定する. 
+    各エージェントはこの制限時間内に可能な限り多くのタスクを処理することが求められ, $T_{\text{limit}}$ 到達時点での累積報酬をそのパラメータの評価値とする. 
+    なお, デッドロックにより全エージェントが長時間停止するなど, これ以上の報酬獲得が見込めないと判断された場合は, 計算リソースの浪費を防ぐため $T_{\text{limit}}$ 到達前であってもエピソードを打ち切り, その時点での評価を確定させる. 
+    \item \textbf{パラメータ更新}: 得られた報酬に基づき, 以下の式でパラメータを更新する. 
+    \begin{equation}
+        \theta_{t+1} = \theta_t + \alpha \frac{1}{N \sigma} \sum_{k=1}^{N} F(R_k) \epsilon_k
+    \end{equation}
+    ここで $\alpha$ は学習率, $F(\cdot)$ は報酬の正規化関数である．
+\end{enumerate}
+
+\subsubsection{報酬関数}
+最適化の目的関数となる報酬 $R$ は, タスク達成数, 総移動コスト, 衝突ペナルティの重み付き和として定義される．
+\begin{equation}
+    R = r_{\text{goal}} \cdot N_{\text{done}} - r_{\text{coll}} \cdot N_{\text{collision}} - r_{\text{move}} \cdot T_{\text{total}} - r_{\text{wait}} \cdot T_{\text{wait}}
+\end{equation}
+ここで, $N_{\text{done}}$ は完了したタスク数(最大 $3m$), $N_{\text{collision}}$ は衝突回数, $T_{\text{total}}$ は全エージェントの総移動ステップ数である．
+この報酬設計により, 衝突を回避しつつ ($N_{\text{done}} \to 3m$, $N_{\text{collision}} \to 0$) , かつそれを迅速に処理する ($T_{\text{total}} \downarrow$) ようなパラメータを獲得することを目指す．
+
+\subsubsection{パラメータの密度依存性と汎化性能の分析}
+PIBTの最適な優先度決定ルールは, グラフ環境の物理的構造 (トポロジー) と, 環境内の混雑度 (エージェント密度) の双方から強い影響を受けると考えられる. 
+これら複数の要因を同時に変動させてパラメータを最適化および分析することは, 結果の解釈を困難にする. 
+そこで本研究では, 基礎的な分析として「特定のマップ環境においてエージェント密度のみを段階的に変化させた場合のパラメータ特性」に焦点を当て, 各パラメータの「汎化性能」と「環境依存性」を明らかにすることを目的とする.
+
+具体的には, 単一のマップに対しエージェント数 $m$ を段階的に変化させて学習を行い, 獲得されたパラメータ $\theta$ の推移を分析することで, パラメータを以下の2種類に分類することを試みる.
+
+\begin{itemize}
+    \item \textbf{密度汎化パラメータ}: エージェント数（混雑度）が変化しても最適値が大きく変動せず, 固定値として運用可能なパラメータ. 
+    (予備実験においては \textbf{drop\_weight} や \textbf{pick\_weight} などがこれに該当する傾向が見られた.)
+    \item \textbf{密度特化パラメータ}: エージェント数に応じて最適値が大きく変動し, 混雑状況に応じた動的な調整が必要なパラメータ. 
+    (予備実験においては \textbf{step\_tolerance}, \textbf{assign\_pick\_weight}, \textbf{goal\_weight} などがこれに該当し, 特に \textbf{step\_tolerance} は衝突回避性能に直結するため環境依存性が高いと考えられている.)
+\end{itemize}
+
+この分類に基づき, 「汎化パラメータは固定し, 特化パラメータのみを環境に応じて最適化する」といった, 計算コストを抑えつつ高い性能を維持するための効率的な運用手法（設計指針）を提案・検証することを目指す.

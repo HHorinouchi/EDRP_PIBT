@@ -1,23 +1,19 @@
 \begin{jabstract}				% 和文梗概
-近年，電子商取引の拡大や労働力不足を背景に，物流倉庫やドローン配送などの実世界アプリケーションにおいて，複数の自律移動ロボットを用いた搬送作業の自動化が急速に進展している．このようなシステムでは，複数のエージェントが衝突することなく，かつ効率的にタスクを処理するための経路計画，すなわち Multi-Agent Pickup and Delivery (MAPD) 問題の解決が不可欠である．従来の MAPD 研究の多くは，環境を均質なグリッド世界としてモデル化し，離散的な時間・空間上でのアルゴリズム検証を行ってきた．しかし，実際のドローン運航や複雑なレイアウトを持つ倉庫環境などを考慮すると，移動空間は必ずしもグリッド構造には限定されず，ノード間の距離やエージェントの物理的な速度，安全距離といった連続的な制約を含む一般的な無向グラフとしてモデル化することが，実用的な観点から極めて重要となる．\par
+近年, 電子商取引の拡大や労働力不足を背景に, 物流倉庫やドローン配送などの実世界アプリケーションにおいて, 複数の自律移動ロボットを用いた搬送作業の自動化が急速に進展している．このようなシステムでは, 複数のエージェントが衝突することなく, かつ効率的にタスクを処理するための経路計画, すなわち Multi-Agent Pickup and Delivery (MAPD) 問題の解決が不可欠である．従来の MAPD 研究の多くは, 環境を均質なグリッド世界としてモデル化し, 離散的な時間・空間上でのアルゴリズム検証を行ってきた．しかし, 実際のドローンによる運搬や複雑な構造を持つ倉庫環境などを考慮すると, 移動空間は必ずしもグリッド構造には限定されず, ノード間の距離やエージェントの物理的な速度, 安全距離といった連続的な制約を含む一般的な無向グラフとしてモデル化することが, 実用的な観点から極めて重要となる．\par
 
-本研究では，このような物理的制約を考慮したグラフ環境上での Lifelong MAPD 問題を対象とし，分散型経路計画アルゴリズムである Priority Inheritance with Backtracking (PIBT) を用いた効率的な配送制御手法について論じる．PIBT は計算コストが低くリアルタイム性に優れる一方で，その探索性能やデッドロック回避能力は，各エージェントの行動優先度を決定するヒューリスティックなパラメータに強く依存するという性質を持つ．従来，この優先度は目的地までの距離など単純な指標で決定されることが多かったが，複雑なグラフ構造や変動するタスク密度においては，混雑度やタスクの進行状態（ピックアップ前後）を考慮した動的な優先度調整が必要となる．しかし，これらのパラメータを環境ごとに人手で調整することは困難であり，環境の特性に応じた最適なパラメータ設計が課題となっている．\par
+本研究では, このような物理的制約を考慮したグラフ環境上での Lifelong MAPD 問題を対象とし, 分散型経路計画アルゴリズムである Priority Inheritance with Backtracking (PIBT) を拡張した新たな配送制御手法 \textbf{Graph-based Adaptive Parameter PIBT (GAP-PIBT)} を提案する．PIBT は計算コストが低くリアルタイム性に優れる一方で, その探索性能やデッドロック回避能力は, 各エージェントの行動優先度を決定するヒューリスティックなパラメータに強く依存するという性質を持つ．従来, この優先度は目的地までの距離など単純な指標で決定されることが多かったが, 複雑なグラフ構造やリアルタイムに変動するタスク処理においては, 混雑度やタスクの進行状態 (ピックアップ前後) を考慮した動的な優先度調整が必要となる．しかし, これらのパラメータを環境ごとに人手で調整することは困難であり, 環境の特性に応じた最適なパラメータ設計が課題となっている．\par
 
-そこで本研究では，進化計算の一種である Evolution Strategy (ES) を用いて，PIBT の優先度決定パラメータおよびタスク割り当てパラメータを自動最適化するフレームワークを提案する．具体的には，目的地への距離，待機ペナルティ，周辺の混雑度，およびタスクの処理段階に応じた重み付け係数を遺伝子として定義し，シミュレーション環境におけるタスク処理数や衝突率，移動コストを報酬関数として学習を行う．提案手法の特徴は，単に特定の環境で性能を最大化する「特化型」の学習だけでなく，異なるマップ構造やエージェント数においても一定の性能を維持する「汎化性能」に着目している点にある．特定のマップ（例：渋谷マップなど）やエージェント密度に過剰適合させたパラメータは，その環境下では極めて高いスループットを発揮する一方で，未知の環境に対しては脆弱になる可能性がある．本研究では，単一環境学習と複数環境学習の比較を通じて，環境構造と最適な優先度パラメータの相関関係を分析する．
+そこで GAP-PIBT では, 進化計算の一種である Evolution Strategy (ES) を用いて, PIBT の優先度決定パラメータおよびタスク割り当てパラメータを自動最適化するフレームワークを導入する．具体的には, 目的地への距離, 待機ペナルティ, 周辺の混雑度, およびタスクの処理段階に応じた重み付け係数を遺伝子として定義し, シミュレーション環境におけるタスク処理数や衝突率, 移動コストを報酬関数として学習を行う．
 
+本研究の目的は, 特定の環境構造にパラメータを適合させる「特化」と, 多様な環境に対応可能な「汎化」の間に存在するトレードオフを明らかにすることである．特定のマップや密度に特化したパラメータは, その環境における性能を極限まで引き出す一方で, 汎用性とは背反する性質を持つ．本研究では, 単一環境学習と複数環境学習の比較実験を通じて, 環境構造の違いが最適な優先度パラメータに与える影響を定量的に評価し, 特化すべき要素と汎化可能な要素の相関関係を分析する．
 \end{jabstract}
 
-\begin{eabstract}				% 英文梗概
-This guide describes how to write your guraduation thesis
-according to the regulation of Computer Science Course, 
-School of Informatics and Mathematical Science,
-Faculty of Engineering Kyoto University. 
-This regulation specifies the rules about the structure 
-and format of the thesis which you need to follow in writing.
-This guide also explains how to use a \LaTeX{} style file for
-graduation thesis, named \verb|kuisthesis|, 
-with which you can easily produce a well-formatted thesis. 
-This guide itself is written using \verb|kuisthesis|; 
-the source code may be helpful 
-if you would like to know how to use this style file.
+\begin{eabstract}
+In recent years,  driven by the expansion of e-commerce and labor shortages,  the automation of transport tasks using multiple autonomous mobile robots has been rapidly progressing in real-world applications such as logistics warehouses and drone delivery. In such systems,  it is essential to solve the Multi-Agent Pickup and Delivery (MAPD) problem,  which involves path planning for multiple agents to process tasks efficiently without collisions. Most conventional MAPD studies have modeled the environment as a homogeneous grid world and verified algorithms in discrete time and space. However,  considering actual drone transportation or warehouse environments with complex structures,  the movement space is not necessarily limited to grid structures. Therefore,  modeling the environment as a general undirected graph that includes continuous constraints,  such as distances between nodes,  physical speeds of agents,  and safety distances,  is crucial from a practical perspective.
+
+In this study,  targeting the Lifelong MAPD problem in graph environments considering such physical constraints,  we propose a new delivery control method,  \textbf{Graph-based Adaptive Parameter PIBT (GAP-PIBT)},  which extends the decentralized path planning algorithm Priority Inheritance with Backtracking (PIBT). While PIBT offers low computational cost and excellent real-time performance,  its search performance and deadlock avoidance capability strongly depend on heuristic parameters that determine the action priority of each agent. Conventionally,  this priority was often determined by simple indicators such as the distance to the destination. However,  in complex graph structures and real-time task processing,  dynamic priority adjustment considering congestion levels and the task progress state (before or after pickup) is required. Manually adjusting these parameters for each environment is difficult,  and designing optimal parameters according to the characteristics of the environment remains a challenge.
+
+To address this,  GAP-PIBT introduces a framework that automatically optimizes PIBT's priority determination parameters and task assignment parameters using Evolution Strategy (ES),  a type of evolutionary computation. Specifically,  weighting coefficients corresponding to the distance to the destination,  waiting penalty,  surrounding congestion,  and task processing stage are defined as genes,  and learning is performed using the number of completed tasks,  collision rate,  and movement cost in the simulation environment as a reward function.
+
+The purpose of this study is to clarify the trade-off between "specialization, " which adapts parameters to a specific environmental structure,  and "generalization, " which enables compatibility with diverse environments. Parameters specialized for a specific map or density maximize performance in that environment but conflict with versatility. Through comparative experiments of single-environment learning and multi-environment learning,  we quantitatively evaluate the impact of differences in environmental structure on optimal priority parameters and analyze the correlation between elements that should be specialized and those that can be generalized.
 \end{eabstract}

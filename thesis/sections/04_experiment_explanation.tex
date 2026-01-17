@@ -1,0 +1,71 @@
+\section{評価実験} \label{sec:experiment}
+本章では, 提案手法である GAP-PIBT の有効性および獲得されるパラメータの特性を検証するために行った実験について述べる.
+
+\subsection{実験設定} \label{subsec:exp_settings}
+本実験の主たる目的は, 提案手法がグラフの幾何学的特性 (トポロジー) に依存せず, 多様な構造を持つ環境下において有効に機能するかを検証することである. 
+実験環境として, 図\ref{fig:maps_overview}に示すトポロジーの異なる複数のマップを選定した. 
+なお, 本研究では進化計算を用いたパラメータ探索を行うため, 計算コストと収束性の観点から, 比較的小規模かつ特徴的な構造を持つ以下の環境を対象とした.
+
+\begin{itemize}
+    \item \textbf{map\_3x3, map\_5x4}: 
+    規則的な格子構造を持ち, ノード間の距離や接続関係が均一に近い環境. 従来のグリッドベース手法が想定する環境に近く, 基礎的な挙動を確認するために用いる.
+    \item \textbf{map\_paris, aoba01, map\_shibuya}: 
+    エッジ長が不均一であり, かつ交差角度が直角に限らない非規則的なグラフ環境. これらは実世界の道路網やドローン配送経路などを模擬しており, 複雑なグラフ環境に対する提案手法の適応能力を検証するために用いる.
+    \item \textbf{map\_kyodai}:
+    大規模なマップであり, ノードの密度が高い部分もあるグラフ環境. 京都大学のキャンパスを模擬しており, より複雑で, 衝突回避が困難なグラフ環境に対する提案手法の挙動を検証するために用いる.
+\end{itemize}
+
+% ==================== マップ画像の挿入 ====================
+\begin{figure}[htbp]
+  \centering
+  % --- 1段目 ---
+  \begin{subfigure}[b]{0.3\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{images/map_3x3.png}
+    \caption{map\_3x3}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[b]{0.3\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{images/map_5x4.png}
+    \caption{map\_5x4}
+  \end{subfigure}
+    \hfill
+  \begin{subfigure}[b]{0.3\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{images/map_paris.png}
+    \caption{map\_paris}
+  \end{subfigure}
+  
+  \vspace{1em} % 段落間のスペース
+  
+  % --- 2段目 ---
+  \begin{subfigure}[b]{0.3\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{images/map_aoba01.png}
+    \caption{map\_aoba01}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[b]{0.3\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{images/map_shibuya.png}
+    \caption{map\_shibuya} % 元のコードのshijoから修正
+  \end{subfigure}
+    \hfill
+  \begin{subfigure}[b]{0.3\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{images/map_kyodai.png}
+    \caption{map\_kyodai}
+  \end{subfigure}
+  \caption{実験に使用したマップ環境}
+  \label{fig:maps_overview}
+\end{figure}
+% ====================================================================
+
+\subsubsection{シミュレーション条件と評価方法}
+本実験におけるタスク生成および評価は, 以下の仕様に基づいて行われる.
+
+第一に, エージェントに対する負荷密度を一定に保つため, システム内の未割り当てタスク総数が常にエージェント数と等しくなるように維持する. 具体的には, いずれかのエージェントがタスクを完了した直後に, 新たなタスクが環境内のランダムな位置（StartおよびGoalノード）に生成される. これにより, タスク枯渇による待機状態を排除し, 常に競合が発生しうる状況下での性能を評価する.
+
+第二に, 各試行（エピソード）の評価は一定のステップ数 (Time Limit) 内における累積報酬によって算出する. 全エージェントは制限時間内に可能な限り多くのタスクを処理することが求められ, タイムアップ時点でエピソードは終了となる. 
+この期間内に獲得した「タスク完了報酬」から「移動コスト」や「衝突ペナルティ」を差し引いた最終的なスコアを用いて, パラメータの適応度を決定する.

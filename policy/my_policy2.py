@@ -265,8 +265,6 @@ def detect_actions(env):
     # 停止行動を行うエージェントの場合のノード占有を管理するリスト
     # List[(start_node, to_node, release_step)]
     occupied_stop_nodes = [(None, None, 0)] * env.agent_num
-    # ノードから近い場合にはそこを占有するようにする
-    occupied_near_nodes = [(None, None)] * env.agent_num
     # 占有されるエッジを管理 List[ (from_node, to_node) ]
     # 次に進むノードを設定したあとに、次の行動が取れるように、最低一つは経路を確保しておくために、occupied_edgesの後半に用意
     occupied_edges = [(None, None, 0)] * (env.agent_num * 2)
@@ -300,6 +298,9 @@ def detect_actions(env):
             path_length_list.append((action, path_length))
 
         sorted_avail_actions = [action for action, _ in sorted(path_length_list, key=lambda x: x[1])]
+        if sorted_avail_actions[0] == env.current_start[i]:
+            # 現在ノードがactionに含まれる際,削除する
+            sorted_avail_actions = sorted_avail_actions[1:]
         for i in range(1, max_wait+1):
             # -1, -2, ... を後ろに回す
             # actionが-の場合、停止するステップ数が1,2,3,...と増えることを意味するため
@@ -308,17 +309,6 @@ def detect_actions(env):
         actions.append(None)
 
     row_avail_actions_list = copy.deepcopy(avail_actions_list)
-
-    # ノードに近いエージェントについては, そのノードを占有しておく
-    for agent_id in range(env.agent_num):
-        start_node = env.current_start[agent_id]
-        next_node = row_avail_actions_list[agent_id][0]  # 最短経路上の次ノード
-        to_start = calculate_steps_to_node(env, agent_id, start_node)
-        to_next = calculate_steps_to_node(env, agent_id, next_node)
-        if to_start < step_tolerance/2:
-            occupied_near_nodes[agent_id] = (start_node, 0)
-        elif to_next < step_tolerance/2:
-            occupied_near_nodes[agent_id] = (next_node, 0)
 
     # エッジ上のエージェントについては先にエッジの占有をしておく
     for agent_id in range(env.agent_num):
@@ -349,7 +339,7 @@ def detect_actions(env):
         for action in list(avail_actions):
             if len(row_avail_actions_list[agent_idx]) == max_wait+1: # これは、エッジ上にいるとき
                 next_node = row_avail_actions_list[agent_idx][0]  # エッジ上にいるときは進行方向のノードにしか行けない
-            elif action < 0: # ノード上にいて、行き先がなく停止を選択するとき,next_nodeは現在ノード
+            elif action < 0 or action == current_node: # ノード上にいて、行き先がなく停止を選択するとき,next_nodeは現在ノード
                 next_node = current_node
             else:
                 next_node = action
@@ -358,10 +348,25 @@ def detect_actions(env):
             for check_idx in range(current_priority):
                 higher_agent_idx, _ = priority_order[check_idx]
                 occ_node, occ_needed_step = occupied_nodes[higher_agent_idx]
-                if occ_node == next_node and abs(occ_needed_step - needed_step) <= step_tolerance:
+                if action >= 0 and occ_node == next_node and abs(occ_needed_step - needed_step) <= step_tolerance:
                     conflict = True
                     avail_actions.remove(action)
                     break
+                if action < 0:
+                    # 停止行動を取った時,ノードから近い場合に衝突が怒らないようにする
+                    dist_to_prev_node = calculate_steps_to_node(env, agent_idx, current_node)
+                    dist_to_next_node = calculate_steps_to_node(env, agent_idx, next_node)
+                    if dist_to_prev_node <= step_tolerance and dist_to_prev_node <= step_tolerance/2:
+                        if occ_node == current_node and abs(occ_needed_step - dist_to_prev_node) <= step_tolerance:
+                            conflict = True
+                            avail_actions.remove(action)
+                            break
+                    if dist_to_next_node <= step_tolerance and dist_to_next_node <= step_tolerance/2:
+                        if occ_node == next_node and abs(occ_needed_step - dist_to_next_node) <= step_tolerance:
+                            conflict = True
+                            avail_actions.remove(action)
+                            break
+                    
                 occ_stop_start, occ_stop_end, occ_stop_release = occupied_stop_nodes[higher_agent_idx]
                 # 停止行動以外の行動を行った時, 次のノードが停止行動をとっているエージェントの現在ノードと次ノードと同じで、かつそのエージェントがneeded_step以内にそのノードを解放しない場合、衝突とみなす
                 if action >= 0 and occ_stop_start == current_node and occ_stop_end == next_node:
@@ -369,12 +374,6 @@ def detect_actions(env):
                         conflict = True
                         avail_actions.remove(action)
                         break
-                # ノードから近いエージェントがいないかチェック
-                near_stop_node, near_needed_step = occupied_near_nodes[higher_agent_idx]
-                if action >= 0 and near_stop_node == next_node and abs(near_needed_step - needed_step) <= step_tolerance:
-                    conflict = True
-                    avail_actions.remove(action)
-                    break
                 # エッジの占有状況を確認
                 start, end, release = occupied_edges[higher_agent_idx]
                 if start is not None and end is not None:
@@ -399,7 +398,7 @@ def detect_actions(env):
                 current_priority += 1
                 # ノードの占有状況を更新
                 # 停止行動を選択した場合、needed_stepにはneeded_step+1を設定（停止しているため、そのノードは次のステップまで占有される）
-                if action < 0:
+                if action < 0 or action == current_node:
                     if current_node == next_node:
                         occupied_nodes[agent_idx] = (current_node, 0)
                     else:
@@ -606,8 +605,8 @@ def _priority_score(env, agent_idx: int, assigned_task: List[int]) -> float:
     # 各エージェントの可能な行動数
     _, avail_actions = env.get_avail_agent_actions(agent_idx, env.n_actions)
     avail_actions_num = len(avail_actions)
-    if not has_task or len(assigned_task) < 2:
-        return params.congestion_weight * _agent_congestion(env, agent_idx)
+    if not has_task:
+        return 1e9 + params.congestion_weight * _agent_congestion(env, agent_idx) + avail_actions_num
 
     pick_node = assigned_task[0]
     drop_node = assigned_task[1]

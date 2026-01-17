@@ -24,6 +24,9 @@ Sharon, G., Stern, R., Felner, A. and Sturtevant, N.~R.: Conflict-based search f
 \bibitem{Okumura19}
 Okumura, K., Machida, M., D{\'e}fago, X. and Tamura, Y.: Priority Inheritance with Backtracking for Iterative Multi-agent Path Finding,  Vol.~310, pp.\ 535--542 (2019).
 
+\bibitem{Kaji2025}
+Kaji, D., Aoyama, H. and Ota, J.: Safe Multi-agent Reinforcement Learning for Drone Routing Problems, {\em Principles and Practice of Multi-Agent Systems (PRIMA 2024)\/} (Arisaka, R., Sanchez-Anguix, V., Stein, S., Aydo{\u{g}}an, R., van~der Torre, L. and Ito, T.(eds.)), Lecture Notes in Computer Science (LNAI), Vol.~15395, Cham, Springer Nature Switzerland, pp.\ 74--90 (2025).
+
 \bibitem{Rechenberg73}
 Rechenberg, I.: {\em Evolutionsstrategie: Optimierung technischer Systeme nach Prinzipien der biologischen Evolution\/}, Frommann-Holzboog (1973).
 
@@ -35,5 +38,12 @@ Geweke, J.: Antithetic acceleration of Monte Carlo integration in Bayesian infer
 
 \bibitem{Wierstra14}
 Wierstra, D., Schaul, T., Glasmachers, T., Sun, Y., Peters, J. and Schmidhuber, J.: Natural evolution strategies, {\em The Journal of Machine Learning Research\/},  Vol.~15, No.~1, pp.\ 949--980 (2014).
+
+\bibitem{kaji2024safe}
+Kaji, M., Lin, D. and Uwano, F.: Safe Multi-agent Reinforcement Learning for Drone Routing Problems,  {\em PRIMA 2024: Principles and Practice of Multi-Agent Systems\/} (2024).
+
+\bibitem{edrp_github}
+Kaji, M.: EDRP: Evolutionary Drone Routing Problem Platform, \url{https://github.com/kaji-ou/EDRP} (2024).
+\newblock Accessed: 2025-01-01.
 
 \end{thebibliography}
