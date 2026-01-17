@@ -30,7 +30,10 @@ class PriorityParams:
     goal_weight: float = 1.0
     pick_weight: float = 1.0
     drop_weight: float = 1.0
-    step_tolerance: Optional[float] = None
+    # 初期学習値を 2.0 に設定（学習の開始時点での step_tolerance）。
+    # None の場合は速度に基づくデフォルト値が使われるが、学習開始値を
+    # 明示的に 2 にすることで ES の探索開始点を安定化させる。
+    step_tolerance: Optional[float] = 2.0
 
     # Task assignment scoring weights
     assign_pick_weight: float = 1.0
@@ -209,13 +212,26 @@ def assign_task(env):
             if dist_pick_to_drop is None:
                 dist_pick_to_drop = float("inf")
 
+            # Compute a global clustering penalty among all assigned drop nodes
+            # if this candidate task (drop_node) were assigned to this agent.
+            # We sum inverse pairwise distances between drop nodes; larger
+            # values mean more clustering. By including this term in the
+            # score (with positive assign_spread_weight), the policy will
+            # prefer assignments that reduce clustering (i.e., increase
+            # spread / dispersion of drop locations among agents).
+            targets_after = list(other_targets) + [drop_node]
             spread_penalty = 0.0
-            if other_targets:
-                for target in other_targets:
-                    dist = env.get_path_length(drop_node, target)
-                    if dist is None:
-                        continue
-                    spread_penalty += 1.0 / (float(dist) + 1.0)
+            n_targets = len(targets_after)
+            if n_targets >= 2:
+                # sum over unordered pairs
+                for a in range(n_targets):
+                    for b in range(a + 1, n_targets):
+                        t1 = targets_after[a]
+                        t2 = targets_after[b]
+                        dist = env.get_path_length(t1, t2)
+                        if dist is None:
+                            continue
+                        spread_penalty += 1.0 / (float(dist) + 1.0)
 
             score = (
                 params.assign_pick_weight * float(dist_to_pick)
@@ -371,17 +387,17 @@ def detect_actions(env):
                 # 停止行動を選択した場合、needed_stepにはneeded_step+1を設定（停止しているため、そのノードは次のステップまで占有される）
                 if action < 0:
                     wait_steps = abs(action)                  # -1 → 1ステップ待機
-                    release_node = needed_step + step_tolerance   # needed_step はノード到達までのステップ (待機なら0)
+                    release_node = needed_step + wait_steps   # needed_step はノード到達までのステップ (待機なら0)
                     # エージェントがcurrent_start[agent_idx]との距離がenv.speed以下の場合、停止している間もそのノードを占有し続ける
                     distance_to_current = calculate_steps_to_node(env, agent_idx, env.current_start[agent_idx])
-                    if distance_to_current <= 5/speed + 1:
+                    if distance_to_current <= step_tolerance/2:
                         occupied_nodes[agent_idx] = (env.current_start[agent_idx], distance_to_current + wait_steps)
                     # エージェントがnext_nodeとの距離がenv.speed以下の場合、停止している間もそのノードを占有し続ける
-                    elif calculate_steps_to_node(env, agent_idx, next_node) <= 5/speed + 1:
+                    elif calculate_steps_to_node(env, agent_idx, next_node) <= step_tolerance/2:
                         occupied_nodes[agent_idx] = (next_node, release_node)
                     else:
                         occupied_nodes[agent_idx] = (None, None)
-                    occupied_edges[agent_idx] = (env.current_start[agent_idx], next_node, release_node)
+                    occupied_edges[agent_idx] = (env.current_start[agent_idx], next_node, release_node)  # エッジは塞がない
                 else:
                     release_node = needed_step                # 到着タイミングでノードを解放
                     occupied_nodes[agent_idx] = (next_node, release_node)
@@ -432,9 +448,9 @@ def detect_actions(env):
                 # ノードの占有状況を更新
                 # current_startノード、next_nodeからの距離がenv.speed以下の場合、そのノードを停止している間も占有し続ける
                 distance_to_current = calculate_steps_to_node(env, agent_idx, env.current_start[agent_idx])
-                if distance_to_current <= 5/speed + 1:
+                if distance_to_current <= step_tolerance/2:
                     occupied_nodes[agent_idx] = (env.current_start[agent_idx], distance_to_current + max_wait)
-                elif calculate_steps_to_node(env, agent_idx, next_node) <= 5/speed + 1:
+                elif calculate_steps_to_node(env, agent_idx, next_node) <= step_tolerance/2:
                     occupied_nodes[agent_idx] = (next_node, max_wait)
                 # エッジの占有状況を更新
                 # エージェントがエッジ上にいる場合、現在ノードから次ノードへのエッジを占有
@@ -455,12 +471,6 @@ def detect_actions(env):
                 occupied_edges[prev_agent_idx + env.agent_num] = (None, None, 0)
                 continue
             
-    if actions and all((a is not None and a < 0) for a in actions):
-        for i in range(env.agent_num):
-            fallback_actions = row_avail_actions_list[i]
-            if fallback_actions:
-                actions[i] = fallback_actions[0]
-
     return actions, count
 
 # 現在ノードとタスクスタートノード、タスクゴールノードを用いた最短経路距離を計算（未ピックアップ）
