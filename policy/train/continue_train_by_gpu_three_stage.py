@@ -105,6 +105,7 @@ def _params_to_vector_stage3(params: PriorityParams) -> np.ndarray:
             float(getattr(params, "step_tolerance", 0.0) or 0.0),
             float(getattr(params, "assign_pick_weight", 1.0)),
             float(getattr(params, "goal_weight", 1.0)),
+            float(getattr(params, "congestion_weight", 0.0)),
         ],
         dtype=np.float32,
     )
@@ -116,16 +117,18 @@ def _vector_to_params_stage3(vec: np.ndarray) -> PriorityParams:
     step_val = float(raw[0]) if raw.size > 0 else float(getattr(current, "step_tolerance", 0.0) or 0.0)
     assign_pick = float(raw[1]) if raw.size > 1 else float(getattr(current, "assign_pick_weight", 1.0))
     goal_w = float(raw[2]) if raw.size > 2 else float(getattr(current, "goal_weight", 1.0))
+    congestion_w = float(raw[3]) if raw.size > 3 else float(getattr(current, "congestion_weight", 0.0))
     step_val = _clip_step_tol(step_val)
     assign_pick = float(np.clip(assign_pick, 0.0, 10.0))
     goal_w = float(np.clip(goal_w, 0.0, 10.0))
+    congestion_w = float(np.clip(congestion_w, -10.0, 10.0))
     return PriorityParams(
         goal_weight=goal_w,
         pick_weight=float(getattr(current, "pick_weight", 1.0)),
         drop_weight=float(getattr(current, "drop_weight", 1.0)),
         assign_pick_weight=assign_pick,
         assign_drop_weight=float(getattr(current, "assign_drop_weight", 1.0)),
-        congestion_weight=float(getattr(current, "congestion_weight", 0.0)),
+        congestion_weight=congestion_w,
         assign_spread_weight=float(getattr(current, "assign_spread_weight", 1.0)),
         step_tolerance=step_val,
     )
