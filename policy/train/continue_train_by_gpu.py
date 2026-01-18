@@ -464,6 +464,9 @@ def rollout_once(
                 raise ValueError("Policy returned tuple with fewer than three elements")
         else:
             raise TypeError("Policy output must be a tuple of (actions, task_assign, count, ...)")
+        if actions and all((a is not None and a < 0) for a in actions):
+            done_flags = [True for _ in range(env.agent_num)]
+            break
         obs, step_rewards, done_flags, info = env.step({"pass": actions, "task": task_assign})
         steps += 1
         if isinstance(info, dict):
