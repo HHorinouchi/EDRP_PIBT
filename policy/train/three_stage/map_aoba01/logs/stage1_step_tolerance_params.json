@@ -8,9 +8,9 @@
     "assign_drop_weight": 1.0,
     "congestion_weight": -1.0,
     "assign_spread_weight": 1.0,
-    "step_tolerance": 12.36248779296875
+    "step_tolerance": 12.417733192443848
   },
-  "training_time_seconds": 4553.005464792252,
+  "training_time_seconds": 0.10413622856140137,
   "rollout_count": 96000,
   "episodes_per_candidate": 20,
   "iterations": 150,

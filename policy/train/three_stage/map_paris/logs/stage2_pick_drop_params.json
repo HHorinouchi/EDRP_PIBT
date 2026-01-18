@@ -2,15 +2,15 @@
   "stage": "stage2_pick_drop",
   "params": {
     "goal_weight": 1.0,
-    "pick_weight": 0.93581622838974,
-    "drop_weight": 1.0240598917007446,
+    "pick_weight": 0.5414569973945618,
+    "drop_weight": 2.3112053871154785,
     "assign_pick_weight": 1.0,
     "assign_drop_weight": 1.0,
     "congestion_weight": -1.0,
     "assign_spread_weight": 1.0,
-    "step_tolerance": 11.13043212890625
+    "step_tolerance": 11.306550979614258
   },
-  "training_time_seconds": 1279.415771484375,
+  "training_time_seconds": 0.0006101131439208984,
   "rollout_count": 64000,
   "episodes_per_candidate": 20,
   "iterations": 100,

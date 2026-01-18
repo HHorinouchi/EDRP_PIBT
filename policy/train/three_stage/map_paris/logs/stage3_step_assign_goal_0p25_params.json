@@ -1,16 +1,16 @@
 {
   "stage": "stage3_step_assign_goal_ratio_0p25",
   "params": {
-    "goal_weight": 0.42505863308906555,
-    "pick_weight": 0.93581622838974,
-    "drop_weight": 1.0240598917007446,
-    "assign_pick_weight": 0.6855368614196777,
+    "goal_weight": 0.5061430335044861,
+    "pick_weight": 0.5414569973945618,
+    "drop_weight": 2.3112053871154785,
+    "assign_pick_weight": 0.6560765504837036,
     "assign_drop_weight": 1.0,
-    "congestion_weight": -0.9755451679229736,
+    "congestion_weight": -1.0165797472000122,
     "assign_spread_weight": 1.0,
-    "step_tolerance": 18.57839012145996
+    "step_tolerance": 18.7425479888916
   },
-  "training_time_seconds": 1242.4941515922546,
+  "training_time_seconds": 0.0006768703460693359,
   "rollout_count": 64000,
   "episodes_per_candidate": 20,
   "iterations": 100,
