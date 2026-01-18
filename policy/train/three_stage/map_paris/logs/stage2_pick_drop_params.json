@@ -1,0 +1,18 @@
+{
+  "stage": "stage2_pick_drop",
+  "params": {
+    "goal_weight": 1.0,
+    "pick_weight": 0.93581622838974,
+    "drop_weight": 1.0240598917007446,
+    "assign_pick_weight": 1.0,
+    "assign_drop_weight": 1.0,
+    "congestion_weight": -1.0,
+    "assign_spread_weight": 1.0,
+    "step_tolerance": 11.13043212890625
+  },
+  "training_time_seconds": 1279.415771484375,
+  "rollout_count": 64000,
+  "episodes_per_candidate": 20,
+  "iterations": 100,
+  "population": 32
+}
